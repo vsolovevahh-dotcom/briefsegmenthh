@@ -92,7 +92,7 @@ def generate_texts(system_prompt, user_context, module_data):
         }
         
         payload = {
-            "model": "google/gemini-2.0-flash-exp:free",
+            "model": "google/gemini-3-flash-preview",
             "messages": [
                 {
                     "role": "user",
