@@ -1,108 +1,74 @@
-# app.py
-# hh segments brief: бриф + демо + генерация текстов и демо-картинок через OpenRouter
-
 import base64
 import json
+import textwrap
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 import streamlit as st
 
-
 # =========================
 # CONFIG
 # =========================
-st.set_page_config(
-    page_title="hh Сегменты — бриф перед запуском",
-    page_icon="🧩",
-    layout="wide",
-)
+APP_TITLE = "hh Сегменты — бриф"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Модели OpenRouter
-TEXT_MODEL = "google/gemini-2.5-flash"
-IMAGE_MODEL = "google/gemini-2.5-flash-image"
-
-# Площадки (в этой версии — 3 штуки, как просила)
-PLATFORMS = ["Яндекс", "VK", "Telegram Ads"]
-
-# Лимиты (дефолтные, можно поменять под ваши точные требования)
+# Текстовые лимиты (можно менять)
 LIMITS = {
-    "yandex_title": 56,
+    "yandex_headline": 56,
     "yandex_text": 81,
-    "vk_post": 600,
-    "tgads_text": 160,
+    "tgads_text": 220,          # дружелюбный лимит под TG Ads (текст)
+    "vk_post": 600,             # пост ВК (рекомендованный максимум для лаконичности)
+    "tg_seed_image_text": 40,   # короткая строка на картинке
+    "tg_seed_post": 600,        # пост для посевов
 }
 
-CTA_OPTIONS = ["Подробнее", "Перейти", "Открыть", "Узнать больше", "Оставить заявку"]
+PLATFORMS = [
+    ("yandex", "Яндекс"),
+    ("vk", "VK"),
+    ("tgads", "Telegram Ads"),
+    ("tgseed", "Telegram посевы"),
+]
 
-PAGES = {
-    0: "Старт / режим",
-    1: "Основная информация",
-    2: "Площадки",
-    3: "Тексты и креативы",
-    4: "Демо-превью",
-}
+TEXT_MODEL = "google/gemini-flash-1.5"  # для текстов (быстро/дёшево)
+IMAGE_MODEL = "google/gemini-2.5-flash-image"  # для демо-картинок
 
 
 # =========================
-# STYLES
+# PAGE
 # =========================
+st.set_page_config(page_title=APP_TITLE, page_icon="🧩", layout="wide")
+
 st.markdown(
     """
 <style>
-:root{
-  --hh-accent:#c07a00;
-  --hh-muted:#6b7280;
-  --hh-border:#e5e7eb;
-  --hh-bg:#fafafa;
+/* общая типографика */
+h1, h2, h3 { letter-spacing: -0.02em; }
+.small-muted { color: rgba(0,0,0,0.55); font-size: 0.9rem; }
+.hr { height: 1px; background: rgba(0,0,0,0.08); margin: 16px 0; }
+
+/* карточки */
+.card {
+  background: #ffffff;
+  border: 1px solid rgba(0,0,0,0.08);
+  border-radius: 14px;
+  padding: 16px;
 }
-.block-title{
-  font-size: 28px;
-  font-weight: 760;
-  margin: 6px 0 10px 0;
+.card-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin-bottom: 6px;
 }
-.small-muted{
-  color: var(--hh-muted);
-  font-size: 13px;
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,0,0,0.12);
+  background: rgba(0,0,0,0.03);
+  font-size: 0.8rem;
+  margin-right: 6px;
 }
-.hr{
-  height:1px;background:var(--hh-border);margin:14px 0;
-}
-.badge{
-  display:inline-block;
-  padding:2px 8px;
-  border:1px solid var(--hh-border);
-  border-radius:999px;
-  font-size:12px;
-  color:var(--hh-muted);
-  background:#fff;
-}
-.accent{
-  color: var(--hh-accent);
-  font-weight: 650;
-}
-.kv{
-  background: var(--hh-bg);
-  border:1px solid var(--hh-border);
-  border-radius:14px;
-  padding:14px 14px;
-}
-.demo-card{
-  border:1px solid var(--hh-border);
-  background:white;
-  border-radius:16px;
-  padding:16px;
-}
-.demo-header{
-  font-weight:800;
-  letter-spacing:0.2px;
-}
-.demo-tag{
-  color:#ef4444;
-  font-weight:800;
-  margin-right:8px;
-}
-.mono{
+.mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 </style>
@@ -112,1089 +78,1002 @@ st.markdown(
 
 
 # =========================
-# HELPERS
+# STATE HELPERS
 # =========================
-def header_block(title: str, subtitle: str | None = None):
-    st.markdown(f'<div class="block-title">{title}</div>', unsafe_allow_html=True)
-    if subtitle:
-        st.markdown(f'<div class="small-muted">{subtitle}</div>', unsafe_allow_html=True)
+def ss_get(key: str, default: Any = None) -> Any:
+    return st.session_state.get(key, default)
 
 
-def is_client_view() -> bool:
-    return st.session_state.mode == "Просмотр для клиента (апрув)"
-
-
-def set_step(n: int):
-    st.session_state.step = n
-    st.rerun()
-
-
-def remaining(limit: int, value: str) -> int:
-    return max(limit - len(value or ""), 0)
-
-
-def ensure_state():
-    # Nav / mode
+def ss_init():
     st.session_state.setdefault("step", 0)
-    st.session_state.setdefault("mode", "Заполняет менеджер hh (по умолчанию)")
-    st.session_state.setdefault("platforms_selected", [])
-    st.session_state.setdefault("submitted_at", None)
+    st.session_state.setdefault("selected_platforms", {"yandex": True, "vk": False, "tgads": True, "tgseed": False})
 
-    # Base info
-    st.session_state.setdefault("base_what", "")
-    st.session_state.setdefault("base_goal", "")
-    st.session_state.setdefault("base_url", "")
-    st.session_state.setdefault("base_geo", "")
-    st.session_state.setdefault("base_ta", "")
-    st.session_state.setdefault("base_offer", "")
-    st.session_state.setdefault("base_files", "")
-    st.session_state.setdefault("base_contact", "")
+    # Экран 1 — базовая инфа
+    st.session_state.setdefault("what_advertise", "")
+    st.session_state.setdefault("campaign_goal", "")
+    st.session_state.setdefault("landing_url", "")
+    st.session_state.setdefault("geo", "")
+    st.session_state.setdefault("audience", "")
+    st.session_state.setdefault("offer_points", ["", "", "", "", ""])
+    st.session_state.setdefault("files_links", "")
+    st.session_state.setdefault("contact_name", "")
 
-    # Who делает тексты/креативы
-    st.session_state.setdefault("yandex_text_who", "Клиент подготовит тексты")
-    st.session_state.setdefault("yandex_creative_who", "Клиент предоставит материалы")
-    st.session_state.setdefault("vk_text_who", "Клиент подготовит тексты")
-    st.session_state.setdefault("vk_creative_who", "Клиент предоставит материалы")
-    st.session_state.setdefault("tgads_text_who", "Клиент подготовит тексты")
-    st.session_state.setdefault("tgads_creative_who", "Клиент предоставит материалы")
+    # Экран 3 — решения "кто делает"
+    # значения: "client" / "hh"
+    st.session_state.setdefault("who_text_yandex", "hh")
+    st.session_state.setdefault("who_creative_yandex", "hh")
+    st.session_state.setdefault("who_text_vk", "hh")
+    st.session_state.setdefault("who_creative_vk", "hh")
+    st.session_state.setdefault("who_text_tgads", "hh")
+    st.session_state.setdefault("who_creative_tgads", "hh")
+    st.session_state.setdefault("who_text_tgseed", "hh")
+    st.session_state.setdefault("who_creative_tgseed", "hh")
 
-    # Yandex fields
-    st.session_state.setdefault("yandex_title", "")
+    # согласия, если "hh"
+    st.session_state.setdefault("consent_text_yandex", False)
+    st.session_state.setdefault("consent_creative_yandex", False)
+    st.session_state.setdefault("consent_text_vk", False)
+    st.session_state.setdefault("consent_creative_vk", False)
+    st.session_state.setdefault("consent_text_tgads", False)
+    st.session_state.setdefault("consent_creative_tgads", False)
+    st.session_state.setdefault("consent_text_tgseed", False)
+    st.session_state.setdefault("consent_creative_tgseed", False)
+
+    # поля, если "client"
+    st.session_state.setdefault("yandex_headline", "")
     st.session_state.setdefault("yandex_text", "")
-    st.session_state.setdefault("yandex_quicklinks", "")
-
-    st.session_state.setdefault("yandex_text_agree", False)
-    st.session_state.setdefault("yandex_creative_agree", False)
-
+    st.session_state.setdefault("yandex_fastlinks", ["", "", ""])
     st.session_state.setdefault("yandex_metrika_id", "")
     st.session_state.setdefault("yandex_goals", "")
 
-    # VK fields
     st.session_state.setdefault("vk_post_text", "")
-    st.session_state.setdefault("vk_cta", "Подробнее")
+    st.session_state.setdefault("vk_cta", "Перейти")
     st.session_state.setdefault("vk_cta_custom", "")
-    st.session_state.setdefault("vk_text_agree", False)
-    st.session_state.setdefault("vk_creative_agree", False)
 
-    # TG Ads fields
-    st.session_state.setdefault("tgads_text", "")
-    st.session_state.setdefault("tgads_text_agree", False)
-    st.session_state.setdefault("tgads_creative_agree", False)
+    st.session_state.setdefault("tgads_message_text", "")
+    st.session_state.setdefault("tgads_cta", "Подробнее")
 
-    # Materials links (если клиент даёт)
-    st.session_state.setdefault("yandex_materials", "")
-    st.session_state.setdefault("vk_materials", "")
-    st.session_state.setdefault("tgads_materials", "")
+    st.session_state.setdefault("tgseed_key_message", "")
+    st.session_state.setdefault("tgseed_post_text", "")
+    st.session_state.setdefault("tgseed_image_text", "")
+    st.session_state.setdefault("tgseed_bullets", ["", "", "", "", ""])
 
-    # AI outputs cache
-    st.session_state.setdefault("ai_texts", {})   # platform -> string
-    st.session_state.setdefault("ai_images", {})  # platform -> bytes
-    st.session_state.setdefault("ai_notes", {})   # platform -> string (опц. текстовое пояснение от модели)
+    # генерации
+    st.session_state.setdefault("generated_texts", {})   # platform -> parsed data/raw
+    st.session_state.setdefault("generated_images", {})  # platform -> bytes/png
+    st.session_state.setdefault("last_error", "")
 
 
-ensure_state()
+ss_init()
 
 
-def validate_step_1() -> list[str]:
-    missing = []
-    if not st.session_state.base_what.strip():
-        missing.append("Что рекламируем*")
-    if not st.session_state.base_goal.strip():
-        missing.append("Цель кампании*")
-    if not st.session_state.base_ta.strip():
-        missing.append("ЦА (1–3 сегмента)*")
-    if not st.session_state.base_offer.strip():
-        missing.append("Оффер / ключевые тезисы*")
-    if not st.session_state.base_contact.strip():
-        missing.append("Контактное лицо*")
-    return missing
-
-
-def validate_step_2() -> list[str]:
-    if not st.session_state.platforms_selected:
-        return ["Выберите хотя бы одну площадку"]
-    return []
-
-
-def secrets_get(name: str, default: str = "") -> str:
-    try:
-        return st.secrets.get(name, default)  # type: ignore
-    except Exception:
-        return default
-
-
-def openrouter_headers() -> dict:
-    api_key = secrets_get("OPENROUTER_API_KEY")
-    if not api_key:
-        return {}
+# =========================
+# OPENROUTER
+# =========================
+def get_openrouter_headers() -> Dict[str, str]:
+    api_key = st.secrets.get("OPENROUTER_API_KEY", "")
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    # опционально
-    ref = secrets_get("OPENROUTER_HTTP_REFERER")
-    title = secrets_get("OPENROUTER_X_TITLE")
-    if ref:
-        headers["HTTP-Referer"] = ref
+    referer = st.secrets.get("OPENROUTER_HTTP_REFERER", "")
+    title = st.secrets.get("OPENROUTER_X_TITLE", "")
+    if referer:
+        headers["HTTP-Referer"] = referer
     if title:
         headers["X-Title"] = title
     return headers
 
 
-def openrouter_chat(prompt: str, model: str = TEXT_MODEL) -> str:
-    headers = openrouter_headers()
-    if not headers:
-        return "⚠️ Нет OPENROUTER_API_KEY в secrets. Добавь ключ в Streamlit → App settings → Secrets."
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-        "max_tokens": 2000,
-    }
-    r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=90)
-    if r.status_code != 200:
-        return f"❌ Ошибка OpenRouter {r.status_code}: {r.text}"
-    data = r.json()
-    return data["choices"][0]["message"].get("content", "").strip()
-
-
-def openrouter_image(prompt: str, aspect_ratio: str = "1:1", image_size: str = "1K", model: str = IMAGE_MODEL):
-    """
-    Возвращает (note_text, image_bytes or None)
-    """
-    headers = openrouter_headers()
-    if not headers:
-        return ("⚠️ Нет OPENROUTER_API_KEY в secrets. Добавь ключ в Streamlit → App settings → Secrets.", None)
+def openrouter_call(model: str, messages: List[Dict[str, Any]], temperature: float = 0.5, max_tokens: int = 2000) -> Dict[str, Any]:
+    api_key = st.secrets.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("Не найден OPENROUTER_API_KEY в Secrets (Streamlit Cloud → App settings → Secrets).")
 
     payload = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "modalities": ["image", "text"],
-        "image_config": {
-            "aspect_ratio": aspect_ratio,
-            "image_size": image_size,
-        },
-        "temperature": 0.7,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }
 
-    r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=120)
+    r = requests.post(OPENROUTER_URL, headers=get_openrouter_headers(), json=payload, timeout=120)
     if r.status_code != 200:
-        return (f"❌ Ошибка OpenRouter {r.status_code}: {r.text}", None)
+        try:
+            detail = r.json()
+        except Exception:
+            detail = {"text": r.text}
+        raise RuntimeError(f"OpenRouter API error {r.status_code}: {json.dumps(detail, ensure_ascii=False)[:1500]}")
+    return r.json()
 
-    data = r.json()
-    msg = data["choices"][0]["message"]
-    note = (msg.get("content") or "").strip()
 
-    images = msg.get("images") or []
-    if not images:
-        return (note or "⚠️ Модель не вернула изображение. Попробуй снова.", None)
-
-    # Обычно: images[0]["image_url"]["url"] == "data:image/png;base64,..."
-    url = images[0].get("image_url", {}).get("url") or images[0].get("url")
-    if not url or "base64," not in url:
-        return (note or "⚠️ Не удалось распарсить data-url изображения.", None)
-
-    b64 = url.split("base64,", 1)[1]
+def extract_text_from_response(resp: Dict[str, Any]) -> str:
     try:
-        img_bytes = base64.b64decode(b64)
-        return (note, img_bytes)
+        return resp["choices"][0]["message"]["content"]
     except Exception:
-        return (note or "⚠️ Не удалось декодировать base64.", None)
+        return json.dumps(resp, ensure_ascii=False)
 
 
-def base_context_block() -> str:
-    return f"""
-Контекст кампании:
-- Что рекламируем: {st.session_state.base_what}
-- Цель: {st.session_state.base_goal}
-- Посадка: {st.session_state.base_url}
-- Гео: {st.session_state.base_geo}
-- ЦА: {st.session_state.base_ta}
-- Оффер/тезисы: {st.session_state.base_offer}
+def extract_image_bytes(resp: Dict[str, Any]) -> Optional[bytes]:
+    """
+    Пытаемся достать data:image/...;base64,... из разных форматов ответа.
+    """
+    try:
+        msg = resp["choices"][0]["message"]
+    except Exception:
+        return None
+
+    # Вариант 1: content строка с data URI
+    content = msg.get("content")
+    if isinstance(content, str):
+        if "data:image" in content and "base64," in content:
+            # вытащить первую data-uri
+            start = content.find("data:image")
+            end = content.find(")", start)
+            chunk = content[start:] if end == -1 else content[start:end]
+            b64 = chunk.split("base64,", 1)[-1].strip()
+            try:
+                return base64.b64decode(b64)
+            except Exception:
+                return None
+
+    # Вариант 2: content список объектов (multimodal)
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") in ("image_url", "input_image", "output_image"):
+                    img = part.get("image_url") or part.get("image") or {}
+                    url = img.get("url") if isinstance(img, dict) else None
+                    if isinstance(url, str) and "base64," in url:
+                        b64 = url.split("base64,", 1)[-1]
+                        try:
+                            return base64.b64decode(b64)
+                        except Exception:
+                            continue
+
+    # Вариант 3: некоторые провайдеры кладут images отдельно
+    images = msg.get("images") or resp.get("images")
+    if isinstance(images, list) and images:
+        first = images[0]
+        if isinstance(first, str) and "base64," in first:
+            b64 = first.split("base64,", 1)[-1]
+            try:
+                return base64.b64decode(b64)
+            except Exception:
+                return None
+
+    return None
+
+
+# =========================
+# UX HELPERS
+# =========================
+def header_block(title: str, subtitle: Optional[str] = None):
+    st.markdown(f"# {title}")
+    if subtitle:
+        st.markdown(f"<div class='small-muted'>{subtitle}</div>", unsafe_allow_html=True)
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+
+def remaining(label: str, value: str, limit: int):
+    n = len(value or "")
+    left = max(limit - n, 0)
+    st.caption(f"Лимит {limit} · осталось {left}")
+
+
+def required_ok() -> bool:
+    # минимально достаточные поля
+    return all(
+        [
+            bool(ss_get("what_advertise", "").strip()),
+            bool(ss_get("campaign_goal", "").strip()),
+            bool(ss_get("audience", "").strip()),
+            any([x.strip() for x in ss_get("offer_points", []) if isinstance(x, str)]),
+            bool(ss_get("contact_name", "").strip()),
+        ]
+    )
+
+
+def selected_platform_keys() -> List[str]:
+    sel = ss_get("selected_platforms", {})
+    return [k for k, _ in PLATFORMS if sel.get(k)]
+
+
+def step2_ok() -> bool:
+    return len(selected_platform_keys()) > 0
+
+
+def go_step(n: int):
+    st.session_state["step"] = n
+    st.rerun()
+
+
+def reset_all():
+    for k in list(st.session_state.keys()):
+        del st.session_state[k]
+    ss_init()
+    st.rerun()
+
+
+def make_brief_summary() -> str:
+    offer = [x.strip() for x in ss_get("offer_points", []) if x and x.strip()]
+    platforms = [name for key, name in PLATFORMS if ss_get("selected_platforms", {}).get(key)]
+    return f"""HH Сегменты — заявка (черновик)
+Дата: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+1) Основная информация
+- Что рекламируем: {ss_get("what_advertise", "")}
+- Цель: {ss_get("campaign_goal", "")}
+- Посадочная: {ss_get("landing_url", "")}
+- Гео: {ss_get("geo", "")}
+- ЦА: {ss_get("audience", "")}
+- Оффер/тезисы:
+{chr(10).join([f"  - {x}" for x in offer])}
+- Файлы/материалы: {ss_get("files_links", "")}
+- Контакт: {ss_get("contact_name", "")}
+
+2) Площадки
+- {", ".join(platforms) if platforms else "не выбраны"}
+
+3) Ввод по площадкам
+(см. поля в форме / генерации)
+
+4) Согласование
+Если ок — передаём в команду hh, и за 2–3 рабочих дня пришлём 5 вариантов для согласования.
 """
 
 
-def prompt_text_yandex() -> str:
+# =========================
+# PROMPTS
+# =========================
+def base_context_block() -> str:
+    offer = [x.strip() for x in ss_get("offer_points", []) if x and x.strip()]
     return f"""
-Ты — эксперт по рекламным текстам.
-Сгенерируй ровно 5 вариантов объявлений для Яндекс.
+ОБЩИЙ КОНТЕКСТ БРИФА:
+- Что рекламируем: {ss_get("what_advertise", "")}
+- Цель кампании: {ss_get("campaign_goal", "")}
+- Посадочная ссылка: {ss_get("landing_url", "")}
+- Гео: {ss_get("geo", "")}
+- ЦА: {ss_get("audience", "")}
+- Оффер/ключевые тезисы: {", ".join(offer) if offer else "—"}
+- Файлы/материалы: {ss_get("files_links", "")}
+- Контактное лицо: {ss_get("contact_name", "")}
+""".strip()
 
+
+def prompt_text_yandex() -> Tuple[str, str]:
+    sys = "Ты — эксперт по рекламным текстам для Яндекс (РСЯ/медийные форматы)."
+    user = f"""
 {base_context_block()}
 
-Требования:
-- Заголовок ≤ {LIMITS['yandex_title']} символов
-- Текст ≤ {LIMITS['yandex_text']} символов
-- Без CAPS LOCK, без непроверяемых обещаний, без агрессии
-- CTA в конце (если уместно): "Подробнее", "Перейти", "Открыть"
+Сгенерируй РОВНО 5 вариантов объявления.
+Формат ответа — строго JSON без комментариев:
 
-Формат ответа:
-Вариант 1:
-Заголовок: ...
-Текст: ...
-Быстрые ссылки (опц., 2–3): ...
+{{
+  "variants": [
+    {{
+      "headline": "до {LIMITS['yandex_headline']} символов",
+      "text": "до {LIMITS['yandex_text']} символов",
+      "fastlinks": ["опционально 0-3 коротких пункта"]
+    }}
+  ]
+}}
 
-...
-Вариант 5:
-...
-
-Важно: строго 5 вариантов.
+Правила:
+- Без caps lock, без агрессии, без неподтверждённых обещаний.
+- Должно быть понятно, что это HR/вакансии/работодатель (если применимо).
+- Заголовок и текст — разные по смыслу (не дублировать).
 """.strip()
+    return sys, user
 
 
-def prompt_text_vk(cta: str) -> str:
-    return f"""
-Ты — эксперт по рекламным постам.
-Сгенерируй ровно 5 вариантов текста поста для VK.
-
+def prompt_text_vk() -> Tuple[str, str]:
+    sys = "Ты — эксперт по текстам для постов ВК (рекламный пост, лаконично)."
+    user = f"""
 {base_context_block()}
 
-Требования:
-- Текст поста ≤ {LIMITS['vk_post']} символов
-- Тон: деловой, дружелюбный, без "крика"
-- 1–2 ключевые выгоды + действие
-- CTA-кнопка: {cta}
+Сгенерируй РОВНО 5 вариантов текста поста для ВК.
+Формат — строго JSON:
 
-Формат ответа:
-Вариант 1:
-Текст поста: ...
+{{
+  "variants": [
+    {{
+      "post": "до {LIMITS['vk_post']} символов",
+      "cta": "одна из: Перейти / Подробнее / Откликнуться / Смотреть вакансии"
+    }}
+  ]
+}}
 
-...
-Вариант 5:
-...
-
-Важно: строго 5 вариантов.
+Правила:
+- 1–2 ключевые выгоды + действие.
+- Без лишних эмодзи (0–2 максимум).
+- Без неподтвержденных цифр/обещаний.
 """.strip()
+    return sys, user
 
 
-def prompt_text_tgads() -> str:
-    return f"""
-Ты — эксперт по Telegram Ads.
-Сгенерируй ровно 5 вариантов рекламного сообщения для Telegram Ads.
-
+def prompt_text_tgads() -> Tuple[str, str]:
+    sys = "Ты — эксперт по рекламным текстам для Telegram Ads (естественно в ленте)."
+    user = f"""
 {base_context_block()}
 
-Требования:
-- Сообщение ≤ {LIMITS['tgads_text']} символов
-- Обращение на "вы"
-- 1–2 коротких предложения
-- Без лишних эмодзи и CAPS LOCK
-- Без непроверяемых цифр/обещаний
-- CTA в конце: "Подробнее" / "Перейти" / "Открыть"
+Сгенерируй РОВНО 5 вариантов сообщения для Telegram Ads.
+Формат — строго JSON:
 
-Формат ответа:
-Вариант 1: ...
-...
-Вариант 5: ...
+{{
+  "variants": [
+    {{
+      "message": "до {LIMITS['tgads_text']} символов",
+      "cta": "одна из: Подробнее / Перейти / Открыть"
+    }}
+  ]
+}}
 
-Важно: строго 5 вариантов.
+Правила:
+- Обращение на «вы».
+- 1–2 коротких предложения.
+- Без CAPS LOCK и без лишних эмодзи.
+- CTA в конце.
+""".strip()
+    return sys, user
+
+
+def prompt_text_tgseed() -> Tuple[str, str]:
+    sys = "Ты — эксперт по нативным рекламным постам для Telegram посевов."
+    user = f"""
+{base_context_block()}
+
+Сгенерируй РОВНО 5 вариантов для посевов:
+- строка на изображении (коротко)
+- текст поста 3–5 абзацев, нативно
+
+Формат — строго JSON:
+
+{{
+  "variants": [
+    {{
+      "image_text": "до {LIMITS['tg_seed_image_text']} символов",
+      "post": "до {LIMITS['tg_seed_post']} символов",
+      "bullets": ["опционально 0-5 смыслов/акцентов"]
+    }}
+  ]
+}}
+
+Правила:
+- Главное: УТП + пояснение/доказательства + ссылка/CTA.
+- Пост не должен выглядеть как «баннер», стиль телеграмный, живой.
+- Эмодзи умеренно (0–3).
+""".strip()
+    return sys, user
+
+
+def prompt_image(platform_key: str) -> str:
+    # универсальный промпт под "мокап, как это может выглядеть"
+    base = base_context_block()
+    if platform_key == "yandex":
+        return f"""
+Сделай демо-мокап "как может выглядеть реклама" для Яндекс (карточка объявления).
+Стиль: минималистичный clean UI, светлый фон, аккуратная карточка.
+Внутри карточки:
+- небольшая иллюстрация/фото-замена (нейтральная, без логотипов)
+- заголовок (крупно)
+- 1–2 строки текста
+- 2–3 короткие "быстрые ссылки" внизу (как теги/пункты)
+Важно: НЕ копируй точный интерфейс Яндекс, без брендинга/логотипов/водяных знаков.
+Текст — на русском.
+Контекст:
+{base}
 """.strip()
 
+    if platform_key == "vk":
+        return f"""
+Сделай демо-мокап "как может выглядеть рекламный пост" для VK (универсальная соцсеть).
+Стиль: чистый UI, светлый фон, карточка поста.
+Композиция:
+- сверху прямоугольная картинка/баннер (без логотипов)
+- ниже 2–4 строки текста поста
+- внизу кнопка CTA (например "Подробнее" / "Перейти")
+Важно: НЕ копируй точный интерфейс VK, без логотипов/водяных знаков.
+Текст — на русском.
+Контекст:
+{base}
+""".strip()
 
-def prompt_image_yandex() -> str:
-    # Мокап карточки (без логотипов)
+    if platform_key == "tgads":
+        return f"""
+Сделай демо-мокап "как может выглядеть Telegram Ads" (сообщение в стиле мессенджера).
+Стиль: clean UI, пузырь сообщения, светлая тема.
+Композиция:
+- название/лейбл канала (нейтрально)
+- текст 1–2 предложения
+- CTA в конце (например "Подробнее")
+Важно: НЕ копируй точный интерфейс Telegram, без логотипов/водяных знаков.
+Текст — на русском.
+Контекст:
+{base}
+""".strip()
+
+    # tgseed
     return f"""
-Сгенерируй ОДНО изображение: демо-мокап рекламного объявления в стиле "карточка рекламы" (не точная копия интерфейса).
-Цель — показать клиенту "как это может выглядеть".
-
-Требования:
-- Без логотипов и названий реальных брендов (используй "Бренд" как плейсхолдер)
-- Чистый минималистичный дизайн, светлый фон
-- Компоновка: маленькая картинка/иллюстрация + заголовок + короткий текст + 2 быстрые ссылки
-- Текст крупный и читабельный на мобильном
-- Без водяных знаков
-
-Контент (можно перефразировать):
-Заголовок по смыслу: {st.session_state.base_offer.splitlines()[0][:60] if st.session_state.base_offer else "Ключевое предложение"}
-Короткий текст по смыслу: {st.session_state.base_what[:120] if st.session_state.base_what else "Короткое описание предложения"}
-CTA: Подробнее
-
-Сгенерируй 1 изображение.
+Сделай демо-мокап "как может выглядеть посев в Telegram-канале".
+Стиль: clean UI, пост в канале (универсально, без брендинга).
+Композиция:
+- изображение сверху с крупным текстом (1 строка УТП)
+- ниже текст поста 3–5 коротких абзацев
+- в конце ссылка/CTA
+Важно: НЕ копируй точный интерфейс Telegram, без логотипов/водяных знаков.
+Текст — на русском.
+Контекст:
+{base}
 """.strip()
-
-
-def prompt_image_vk() -> str:
-    return f"""
-Сгенерируй ОДНО изображение: демо-мокап поста в соцсети (не точная копия VK, а "в стиле ленты").
-Цель — показать "как может выглядеть рекламный пост".
-
-Требования:
-- Без логотипов и названий реальных брендов (используй "Бренд")
-- Светлый фон, аккуратная карточка поста
-- Компоновка: сверху картинка/баннер, ниже текст 2–3 строки, ниже кнопка CTA
-- Текст читаемый на мобильном
-- Без водяных знаков
-
-Контент по смыслу:
-Тема/оффер: {st.session_state.base_offer.splitlines()[0][:80] if st.session_state.base_offer else "Ключевое предложение"}
-CTA: {st.session_state.vk_cta_custom.strip() or st.session_state.vk_cta}
-
-Сгенерируй 1 изображение.
-""".strip()
-
-
-def prompt_image_tgads() -> str:
-    return f"""
-Сгенерируй ОДНО изображение: демо-мокап "спонсорского сообщения" в мессенджере (не точная копия Telegram).
-Цель — показать "как может выглядеть Telegram Ads".
-
-Требования:
-- Никаких логотипов Telegram и реальных брендов
-- Интерфейс: пузырь сообщения, название канала "Бренд", метка "Sponsored" (как текст)
-- Текст 1–2 строки + маленькая кнопка/ссылка CTA
-- Минимализм, светлый фон, читабельность
-
-Контент (по смыслу):
-Сообщение: {st.session_state.base_what[:140] if st.session_state.base_what else "Короткое сообщение"}
-CTA: Подробнее
-
-Сгенерируй 1 изображение.
-""".strip()
-
-
-def pick_first_variant(text_block: str) -> str:
-    """
-    Очень простая эвристика: берём первые 300-400 символов как "пример",
-    чтобы подставить в демо, если клиент не заполнил поля.
-    """
-    if not text_block:
-        return ""
-    t = text_block.strip()
-    return t[:500]
-
-
-def demo_card(title: str, lines: list[str]):
-    st.markdown('<div class="demo-card">', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="demo-header"><span class="demo-tag">DEMO</span>• {title}</div>',
-        unsafe_allow_html=True,
-    )
-    st.write("")
-    for ln in lines:
-        st.write(ln)
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================
-# SIDEBAR
+# GENERATION
+# =========================
+def generate_texts_for(platform_key: str) -> Dict[str, Any]:
+    if platform_key == "yandex":
+        sys, user = prompt_text_yandex()
+    elif platform_key == "vk":
+        sys, user = prompt_text_vk()
+    elif platform_key == "tgads":
+        sys, user = prompt_text_tgads()
+    else:
+        sys, user = prompt_text_tgseed()
+
+    messages = [
+        {"role": "system", "content": sys},
+        {"role": "user", "content": user},
+    ]
+    resp = openrouter_call(TEXT_MODEL, messages, temperature=0.6, max_tokens=2500)
+    raw = extract_text_from_response(resp)
+
+    # пытаемся распарсить JSON
+    try:
+        data = json.loads(raw)
+        return {"ok": True, "data": data, "raw": raw}
+    except Exception:
+        return {"ok": True, "data": None, "raw": raw}
+
+
+def generate_image_for(platform_key: str) -> bytes:
+    prompt = prompt_image(platform_key)
+    messages = [{"role": "user", "content": prompt}]
+    resp = openrouter_call(IMAGE_MODEL, messages, temperature=0.4, max_tokens=1200)
+    img_bytes = extract_image_bytes(resp)
+    if not img_bytes:
+        # если модель вернула текст — покажем ошибку понятнее
+        raw = extract_text_from_response(resp)
+        raise RuntimeError("Не удалось извлечь картинку из ответа модели. Ответ (обрезано):\n" + raw[:800])
+    return img_bytes
+
+
+# =========================
+# SIDEBAR (NAV)
 # =========================
 with st.sidebar:
-    st.markdown("### 🧩 hh Сегменты — бриф")
-    st.caption("Форма → заявка → демо превью + генерация")
+    st.markdown(f"## 🧩 {APP_TITLE}")
+    st.markdown("<div class='small-muted'>Форма → заявка → демо-превью + генерация</div>", unsafe_allow_html=True)
 
-    st.session_state.mode = st.radio(
-        "Режим",
-        options=["Заполняет менеджер hh (по умолчанию)", "Просмотр для клиента (апрув)"],
-        index=0 if st.session_state.mode.startswith("Заполняет") else 1,
-    )
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    # Прогресс
+    st.markdown("### Прогресс")
+    progress_val = (ss_get("step", 0) + 1) / 5
+    st.progress(progress_val)
 
-    st.markdown("**Прогресс**")
-    st.progress(st.session_state.step / 4)
+    def step_label(i: int, title: str) -> str:
+        if i < ss_get("step", 0):
+            return f"✅ {i}. {title}"
+        if i == ss_get("step", 0):
+            return f"➡️ {i}. {title}"
+        return f"• {i}. {title}"
 
-    for k, v in PAGES.items():
-        active = "✅" if k < st.session_state.step else ("➡️" if k == st.session_state.step else "•")
-        st.write(f"{active} {k}. {v}")
+    # навигация кликом
+    if st.button(step_label(0, "Старт"), use_container_width=True):
+        go_step(0)
+    if st.button(step_label(1, "Основная информация"), use_container_width=True):
+        go_step(1)
+    if st.button(step_label(2, "Площадки"), use_container_width=True):
+        go_step(2)
+    if st.button(step_label(3, "Тексты и креативы"), use_container_width=True):
+        go_step(3)
+    if st.button(step_label(4, "Демо-превью"), use_container_width=True):
+        go_step(4)
 
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-
-    if st.button("↩️ Сбросить форму"):
-        keys = list(st.session_state.keys())
-        for key in keys:
-            if key not in ["_is_running_with_streamlit"]:
-                del st.session_state[key]
-        ensure_state()
-        st.rerun()
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+    if st.button("↩️ Сбросить форму", use_container_width=True):
+        reset_all()
 
 
 # =========================
-# SCREEN 0
+# MAIN
 # =========================
-if st.session_state.step == 0:
-    header_block("Экран 0. Старт / режим", "Заполнение брифа для hh Сегментов")
+step = ss_get("step", 0)
+
+# -------------------------
+# STEP 0
+# -------------------------
+if step == 0:
+    header_block("Экран 0. Старт", "Один режим: форма всегда редактируемая.")
 
     st.markdown(
         """
-<div class="kv">
-<b>Заполнение брифа для hh Сегментов</b><br><br>
-(переключатель)<br>
-• <span class="accent">Заполняет менеджер hh</span> (по умолчанию)<br>
-• Просмотр для клиента (апрув)<br><br>
+<div class="card">
+  <div class="card-title">Заполнение брифа для hh Сегментов</div>
+  <div class="small-muted">
+    Цель — быстро собрать минимально достаточную заявку и сразу показать демо, как может выглядеть реклама.
+  </div>
+  <div style="margin-top:12px;">
+    <span class="badge">минимум вопросов</span>
+    <span class="badge">фиксируем кто делает тексты/креативы</span>
+    <span class="badge">демо-превью</span>
+  </div>
 </div>
 """,
         unsafe_allow_html=True,
     )
 
-    if st.button("Начать →", type="primary", use_container_width=True):
-        set_step(1)
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-
-# =========================
-# SCREEN 1 — BASE INFO
-# =========================
-if st.session_state.step == 1:
-    header_block("Экран 1. Основная информация", "Минимально достаточный бриф")
-
-    disable_all = is_client_view()
-
-    with st.expander("Справочная информация по hh сегментам ▾", expanded=False):
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        st.markdown("### Что будет дальше")
         st.markdown(
             """
-- Достаточно заполнить базовые поля, затем выбрать площадки.
-- Ограничения/требования к форматам — внутри площадок.
-- Демо на следующем шаге поможет быстро согласовать направление.
+1) Основная информация (бренд/цель/ЦА/оффер)  
+2) Выбор площадок (Яндекс / VK / Telegram Ads / Telegram посевы)  
+3) Тексты и креативы: клиент сам или команда hh (с согласием)  
+4) Демо-превью + генерации (5 вариантов и пример визуала)  
+"""
+        )
+    with c2:
+        st.markdown("### Минимум, чтобы запустить")
+        st.markdown(
+            """
+- что рекламируем  
+- цель кампании  
+- ЦА (1–3 сегмента)  
+- оффер (3–5 тезисов)  
+- контактное лицо  
 """
         )
 
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    if st.button("Начать →", type="primary", use_container_width=True):
+        go_step(1)
+
+
+# -------------------------
+# STEP 1
+# -------------------------
+elif step == 1:
+    header_block("Экран 1. Основная информация", "Минимально достаточный бриф (без лишних дисклэймеров).")
+
+    with st.expander("Справочная информация по hh сегментам", expanded=False):
+        st.markdown(
+            """
+- Здесь собираем основу заявки: что рекламируем, цель, ЦА, оффер, гео, посадочную.  
+- Дальше — выберем площадки и решим, кто готовит тексты/креативы.  
+- На демо-превью показываем «как может выглядеть» (мокап, не точная копия интерфейсов).  
+"""
+        )
 
     col1, col2 = st.columns(2)
+
     with col1:
-        st.session_state.base_what = st.text_area(
+        st.text_area(
             "Что рекламируем (1–2 предложения)*",
-            value=st.session_state.base_what,
+            key="what_advertise",
             height=90,
             placeholder="Коротко: работодатель/вакансии/кампания, фокус.",
-            disabled=disable_all,
         )
-        st.session_state.base_goal = st.text_input(
+        st.text_input(
             "Цель кампании*",
-            value=st.session_state.base_goal,
-            placeholder="Трафик / рост откликов / узнаваемость",
-            disabled=disable_all,
+            key="campaign_goal",
+            placeholder="Трафик / рост откликов / узнаваемость / брендовый эффект...",
         )
-        st.session_state.base_url = st.text_input(
+        st.text_input(
             "Посадочная ссылка",
-            value=st.session_state.base_url,
-            placeholder="https://…",
-            disabled=disable_all,
+            key="landing_url",
+            placeholder="https://...",
         )
-        st.session_state.base_geo = st.text_input(
+        st.text_input(
             "Гео",
-            value=st.session_state.base_geo,
+            key="geo",
             placeholder="Города/регионы",
-            disabled=disable_all,
+        )
+        st.text_area(
+            "ЦА (1–3 сегмента)*",
+            key="audience",
+            height=110,
+            placeholder="1–3 сегмента: кто эти люди, опыт/профили/уровень.",
         )
 
     with col2:
-        st.session_state.base_ta = st.text_area(
-            "ЦА (1–3 сегмента)*",
-            value=st.session_state.base_ta,
-            height=110,
-            placeholder="1–3 сегмента: кто эти люди, опыт/профили/уровень.",
-            disabled=disable_all,
-        )
-        st.session_state.base_offer = st.text_area(
-            "Оффер / ключевые тезисы (3–5 пунктов)*",
-            value=st.session_state.base_offer,
-            height=130,
-            placeholder="— …\n— …\n— …",
-            disabled=disable_all,
-        )
-        st.session_state.base_files = st.text_area(
+        st.markdown("Оффер / ключевые тезисы (3–5 пунктов)*")
+        offer_points = ss_get("offer_points", ["", "", "", "", ""])
+        for i in range(5):
+            st.text_input(f"— пункт {i+1}", key=f"offer_points_{i}", value=offer_points[i] if i < len(offer_points) else "")
+        # синхронизируем в массив
+        st.session_state["offer_points"] = [ss_get(f"offer_points_{i}", "") for i in range(5)]
+
+        st.text_area(
             "Файлы/материалы (ссылки)",
-            value=st.session_state.base_files,
-            height=70,
-            placeholder="Лого / брендбук / референсы / исходники (ссылки)",
-            disabled=disable_all,
-        )
-        st.session_state.base_contact = st.text_input(
-            "Контактное лицо (кто заполняет)*",
-            value=st.session_state.base_contact,
-            placeholder="Имя",
-            disabled=disable_all,
-        )
-
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("← Назад", use_container_width=True):
-            set_step(0)
-    with c2:
-        if st.button("Далее →", type="primary", use_container_width=True):
-            missing = validate_step_1()
-            if missing:
-                st.error("Заполните обязательные поля: " + ", ".join(missing))
-            else:
-                set_step(2)
-
-
-# =========================
-# SCREEN 2 — PLATFORMS
-# =========================
-if st.session_state.step == 2:
-    header_block("Экран 2. Блок «Креативы и площадки»", "Выбор площадок")
-
-    disable_all = is_client_view()
-
-    st.markdown("Выберите рекламные площадки:")
-    cols = st.columns(3)
-
-    chosen = []
-    for i, p in enumerate(PLATFORMS):
-        with cols[i]:
-            checked = p in st.session_state.platforms_selected
-            val = st.checkbox(p, value=checked, disabled=disable_all, key=f"platform_{p}")
-            if val:
-                chosen.append(p)
-
-    if not disable_all:
-        st.session_state.platforms_selected = chosen
-
-    st.caption("После выбора появятся блоки с требованиями к текстам/креативам и демо-превью.")
-
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("← Назад", use_container_width=True):
-            set_step(1)
-    with c2:
-        if st.button("Далее →", type="primary", use_container_width=True):
-            errs = validate_step_2()
-            if errs:
-                st.error(" / ".join(errs))
-            else:
-                set_step(3)
-
-
-# =========================
-# SCREEN 3 — PLATFORM BLOCKS
-# =========================
-def platform_block_yandex():
-    disable_all = is_client_view()
-
-    st.markdown("## Яндекс")
-
-    st.markdown("### Тексты")
-    st.session_state.yandex_text_who = st.radio(
-        "Кто готовит тексты?",
-        options=["Клиент подготовит тексты", "Команда hh подготовит тексты"],
-        key="yandex_text_who",
-        horizontal=True,
-        disabled=disable_all,
-    )
-
-    if st.session_state.yandex_text_who == "Клиент подготовит тексты":
-        st.session_state.yandex_title = st.text_input(
-            f"Заголовок (лимит {LIMITS['yandex_title']})",
-            value=st.session_state.yandex_title,
-            disabled=disable_all,
-        )
-        st.caption(f"Осталось {remaining(LIMITS['yandex_title'], st.session_state.yandex_title)} символов")
-
-        st.session_state.yandex_text = st.text_area(
-            f"Текст (лимит {LIMITS['yandex_text']})",
-            value=st.session_state.yandex_text,
+            key="files_links",
             height=90,
-            disabled=disable_all,
+            placeholder="Лого / брендбук / референсы / исходники (ссылки)",
         )
-        st.caption(f"Осталось {remaining(LIMITS['yandex_text'], st.session_state.yandex_text)} символов")
+        st.text_input(
+            "Контактное лицо (кто заполняет)*",
+            key="contact_name",
+            placeholder="Имя",
+        )
 
-        st.session_state.yandex_quicklinks = st.text_area(
-            "Быстрые ссылки (опц.) — каждая с новой строки",
-            value=st.session_state.yandex_quicklinks,
-            height=80,
-            placeholder="https://…\nhttps://…",
-            disabled=disable_all,
-        )
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if not required_ok():
+            st.warning("Заполните обязательные поля (*) — иначе дальше будет сложно генерировать демо и тексты.")
+    with c2:
+        if st.button("Далее →", type="primary", use_container_width=True):
+            go_step(2)
+
+
+# -------------------------
+# STEP 2
+# -------------------------
+elif step == 2:
+    header_block("Экран 2. Креативы и площадки", "Выберите рекламные площадки — появятся блоки требований.")
+
+    st.markdown("### Выберите рекламные площадки:")
+    sel = ss_get("selected_platforms", {})
+
+    cols = st.columns(4)
+    for idx, (k, name) in enumerate(PLATFORMS):
+        with cols[idx]:
+            st.checkbox(name, key=f"plat_{k}", value=bool(sel.get(k)))
+
+    st.session_state["selected_platforms"] = {k: bool(ss_get(f"plat_{k}", False)) for k, _ in PLATFORMS}
+
+    st.info("После выбора площадок на следующем шаге появятся блоки по текстам и креативам.")
+
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("← Назад", use_container_width=True):
+            go_step(1)
+    with c2:
+        if st.button("Далее →", type="primary", use_container_width=True):
+            if not step2_ok():
+                st.warning("Выберите хотя бы одну площадку.")
+            else:
+                go_step(3)
+
+
+# -------------------------
+# STEP 3
+# -------------------------
+elif step == 3:
+    header_block("Экран 3. Тексты и креативы", "Для каждой площадки — кто делает тексты и креативы.")
+
+    selected = selected_platform_keys()
+    if not selected:
+        st.warning("Площадки не выбраны. Вернитесь на шаг 2.")
     else:
-        st.session_state.yandex_text_agree = st.checkbox(
-            "Согласен(на), чтобы команда hh подготовила тексты (5 вариантов)",
-            value=st.session_state.yandex_text_agree,
-            disabled=False,
+        st.markdown(
+            """
+<div class="card">
+  <div class="card-title">Логика</div>
+  <div class="small-muted">
+    Для каждой площадки есть два подпункта: <b>Тексты</b> и <b>Креативы</b>.
+    Выберите: клиент готовит сам (тогда заполняем поля), или команда hh (тогда ставим согласие — обещаем 5 вариантов на выбор).
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
         )
 
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-    st.markdown("**Дополнительно (для оптимизации)**")
-    st.session_state.yandex_metrika_id = st.text_input(
-        "Счётчик Яндекс.Метрики (ID)",
-        value=st.session_state.yandex_metrika_id,
-        placeholder="Напр.: 12345678",
-        disabled=disable_all,
-    )
-    st.session_state.yandex_goals = st.text_area(
-        "Ключевые цели на странице (опц.)",
-        value=st.session_state.yandex_goals,
-        height=70,
-        placeholder="— отправка формы\n— клик по кнопке\n— успешный отклик …",
-        disabled=disable_all,
-    )
-    st.caption("Это нужно для оптимизации рекламных кампаний по конкретным целям на посадочной.")
+        def who_block(platform_key: str, platform_name: str):
+            st.markdown(f"## {platform_name}")
+            st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+            # -------- ТЕКСТЫ
+            st.markdown("### Тексты")
+            who_text_key = f"who_text_{platform_key}"
+            consent_text_key = f"consent_text_{platform_key}"
 
-    st.markdown("### Креативы")
-    st.session_state.yandex_creative_who = st.radio(
-        "Кто готовит креативы?",
-        options=["Клиент предоставит материалы", "Команда hh подготовит креативы"],
-        key="yandex_creative_who",
-        horizontal=True,
-        disabled=disable_all,
-    )
+            who_text = st.radio(
+                "Кто готовит тексты?",
+                ["Клиент подготовит тексты", "Команда hh подготовит тексты"],
+                index=1 if ss_get(who_text_key, "hh") == "hh" else 0,
+                key=f"radio_text_{platform_key}",
+            )
+            st.session_state[who_text_key] = "hh" if who_text.startswith("Команда") else "client"
 
-    if st.session_state.yandex_creative_who == "Клиент предоставит материалы":
-        st.session_state.yandex_materials = st.text_area(
-            "Ссылки на материалы",
-            value=st.session_state.yandex_materials,
-            height=80,
-            placeholder="Ссылки на исходники/диск/фигму/креативы",
-            disabled=disable_all,
-        )
-    else:
-        st.session_state.yandex_creative_agree = st.checkbox(
-            "Согласен(на), чтобы команда hh подготовила креативы",
-            value=st.session_state.yandex_creative_agree,
-            disabled=False,
-        )
-        st.caption("Сноска: демо-картинка ниже — пример направления, финальный вид зависит от модерации и формата.")
+            if ss_get(who_text_key) == "hh":
+                st.checkbox("Согласен(на), чтобы команда hh подготовила тексты (5 вариантов на выбор)", key=consent_text_key)
+                st.caption("После оформления брифа предложим 5 вариантов (сгенерированных) на выбор.")
+            else:
+                # Поля под конкретную площадку
+                if platform_key == "yandex":
+                    st.text_input("Заголовок", key="yandex_headline", placeholder="До 56 символов")
+                    remaining("headline", ss_get("yandex_headline", ""), LIMITS["yandex_headline"])
+                    st.text_area("Текст", key="yandex_text", height=80, placeholder="До 81 символа")
+                    remaining("text", ss_get("yandex_text", ""), LIMITS["yandex_text"])
+                    st.markdown("Быстрые ссылки (опционально)")
+                    fl = ss_get("yandex_fastlinks", ["", "", ""])
+                    for i in range(3):
+                        st.text_input(f"— ссылка {i+1}", key=f"yandex_fastlink_{i}", value=fl[i] if i < len(fl) else "")
+                    st.session_state["yandex_fastlinks"] = [ss_get(f"yandex_fastlink_{i}", "") for i in range(3)]
 
+                    st.markdown("Дополнительно (для оптимизации)")
+                    st.text_input("Счетчик Яндекс.Метрики (ID)", key="yandex_metrika_id", placeholder="12345678")
+                    st.text_area("Ключевые цели на странице", key="yandex_goals", height=80, placeholder="Напр.: view_vacancy, apply, employer_page...")
 
-def platform_block_vk():
-    disable_all = is_client_view()
+                elif platform_key == "vk":
+                    st.text_area("Текст поста", key="vk_post_text", height=120, placeholder="1–2 ключевые выгоды + действие")
+                    remaining("vk_post_text", ss_get("vk_post_text", ""), LIMITS["vk_post"])
+                    c1, c2 = st.columns([1, 1])
+                    with c1:
+                        st.selectbox("CTA-кнопка (опц.)", ["Перейти", "Подробнее", "Откликнуться", "Смотреть вакансии", "Другое"], key="vk_cta")
+                    with c2:
+                        st.text_input("Если «Другое» — свой вариант", key="vk_cta_custom", placeholder="Напр.: Открыть")
 
-    st.markdown("## VK")
+                elif platform_key == "tgads":
+                    st.text_area("Текст сообщения", key="tgads_message_text", height=100, placeholder="1–2 коротких предложения, CTA в конце")
+                    remaining("tgads_message_text", ss_get("tgads_message_text", ""), LIMITS["tgads_text"])
+                    st.selectbox("CTA", ["Подробнее", "Перейти", "Открыть"], key="tgads_cta")
+                    st.caption("Подсказки: обращение на «вы», без CAPS LOCK и лишних эмодзи, без неподтвержденных обещаний.")
 
-    st.markdown("### Тексты")
-    st.session_state.vk_text_who = st.radio(
-        "Кто готовит тексты?",
-        options=["Клиент подготовит тексты", "Команда hh подготовит тексты"],
-        key="vk_text_who",
-        horizontal=True,
-        disabled=disable_all,
-    )
+                else:  # tgseed
+                    st.text_area("Ключевое сообщение / УТП (1–2 формулировки)", key="tgseed_key_message", height=70, placeholder="Коротко, это пойдет на креатив")
+                    st.text_input("Текст на изображении (1 строка)", key="tgseed_image_text", placeholder="Короткий заголовок/УТП")
+                    remaining("tgseed_image_text", ss_get("tgseed_image_text", ""), LIMITS["tg_seed_image_text"])
+                    st.text_area("Текст поста (3–5 абзацев)", key="tgseed_post_text", height=140, placeholder="УТП + пояснение/доказательства + ссылка/CTA")
+                    remaining("tgseed_post_text", ss_get("tgseed_post_text", ""), LIMITS["tg_seed_post"])
 
-    if st.session_state.vk_text_who == "Клиент подготовит тексты":
-        st.session_state.vk_post_text = st.text_area(
-            f"Текст поста (лимит {LIMITS['vk_post']})",
-            value=st.session_state.vk_post_text,
-            height=140,
-            disabled=disable_all,
-        )
-        st.caption(f"Осталось {remaining(LIMITS['vk_post'], st.session_state.vk_post_text)} символов")
+                    st.markdown("Смыслы поста (опционально)")
+                    bullets = ss_get("tgseed_bullets", ["", "", "", "", ""])
+                    for i in range(5):
+                        st.text_input(f"— смысл {i+1}", key=f"tgseed_bullet_{i}", value=bullets[i] if i < len(bullets) else "")
+                    st.session_state["tgseed_bullets"] = [ss_get(f"tgseed_bullet_{i}", "") for i in range(5)]
 
-        st.markdown("CTA-кнопка (опц.)")
-        c1, c2 = st.columns([2, 1])
+                    st.caption("Подсказка: пост 3–5 абзацев, главное — УТП + пояснение/доказательства + ссылка/CTA.")
+
+            st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+            # -------- КРЕАТИВЫ
+            st.markdown("### Креативы")
+            who_cre_key = f"who_creative_{platform_key}"
+            consent_cre_key = f"consent_creative_{platform_key}"
+
+            who_cre = st.radio(
+                "Кто готовит креативы?",
+                ["Клиент предоставит материалы", "Команда hh подготовит креативы"],
+                index=1 if ss_get(who_cre_key, "hh") == "hh" else 0,
+                key=f"radio_cre_{platform_key}",
+            )
+            st.session_state[who_cre_key] = "hh" if who_cre.startswith("Команда") else "client"
+
+            if ss_get(who_cre_key) == "client":
+                st.markdown(
+                    """
+- Требования к креативам: размеры/форматы/вес — подключим PDF (позже).  
+- Сейчас: приложите ссылки на материалы/исходники/референсы.
+""".strip()
+                )
+                st.text_area("Ссылки на материалы", key=f"{platform_key}_creative_links", height=80, placeholder="Drive/figma/папка/ссылки")
+            else:
+                st.checkbox("Согласен(на), чтобы команда hh подготовила креативы", key=consent_cre_key)
+                st.radio(
+                    "Опция",
+                    ["Приложить референсы/исходники/креативы для ресайза", "Сгенерировать под мою задачу"],
+                    key=f"{platform_key}_creative_option",
+                )
+                st.text_area(
+                    "Если есть референсы/исходники — ссылки",
+                    key=f"{platform_key}_creative_refs",
+                    height=70,
+                    placeholder="Ссылки (опционально)",
+                )
+                st.text_input(
+                    "Если генерируем: что должно быть на креативе (1–2 строки)",
+                    key=f"{platform_key}_creative_brief",
+                    placeholder="Коротко: главный визуальный смысл/акцент/объект",
+                )
+                st.caption("Сноска: изображения будут сгенерированными (демо/эскизы).")
+
+            st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+        for key in selected:
+            name = dict(PLATFORMS)[key]
+            who_block(key, name)
+
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+        c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
-            st.session_state.vk_cta = st.selectbox(
-                "Выберите CTA",
-                options=CTA_OPTIONS,
-                index=CTA_OPTIONS.index(st.session_state.vk_cta) if st.session_state.vk_cta in CTA_OPTIONS else 0,
-                disabled=disable_all,
-            )
+            if st.button("← Назад", use_container_width=True):
+                go_step(2)
         with c2:
-            st.session_state.vk_cta_custom = st.text_input(
-                "Свой вариант",
-                value=st.session_state.vk_cta_custom,
-                disabled=disable_all,
+            st.download_button(
+                "📥 Скачать черновик заявки (txt)",
+                data=make_brief_summary(),
+                file_name=f"hh_segments_brief_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain",
+                use_container_width=True,
             )
-        st.caption("Подсказка: 1–2 ключевые выгоды + действие.")
+        with c3:
+            if st.button("Далее →", type="primary", use_container_width=True):
+                go_step(4)
+
+
+# -------------------------
+# STEP 4
+# -------------------------
+else:
+    header_block("Экран 4. Демо-превью", "Покажем, как может выглядеть реклама + сгенерируем 5 вариантов.")
+
+    selected = selected_platform_keys()
+    if not selected:
+        st.warning("Площадки не выбраны. Вернитесь на шаг 2.")
     else:
-        st.session_state.vk_text_agree = st.checkbox(
-            "Согласен(на), чтобы команда hh подготовила тексты (5 вариантов)",
-            value=st.session_state.vk_text_agree,
-            disabled=False,
+        st.markdown(
+            """
+<div class="card">
+  <div class="card-title">Демо-пример</div>
+  <div class="small-muted">
+    Финальный вид зависит от модерации и конкретного формата. Здесь — быстрый мокап, чтобы согласовать направление.
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
         )
 
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-    st.markdown("### Креативы")
-    st.session_state.vk_creative_who = st.radio(
-        "Кто готовит креативы?",
-        options=["Клиент предоставит материалы", "Команда hh подготовит креативы"],
-        key="vk_creative_who",
-        horizontal=True,
-        disabled=disable_all,
-    )
+        # Tabs по выбранным площадкам
+        tab_names = [dict(PLATFORMS)[k] for k in selected]
+        tabs = st.tabs(tab_names)
 
-    if st.session_state.vk_creative_who == "Клиент предоставит материалы":
-        st.session_state.vk_materials = st.text_area(
-            "Ссылки на материалы",
-            value=st.session_state.vk_materials,
-            height=80,
-            placeholder="Ссылки на исходники/диск/фигму/креативы",
-            disabled=disable_all,
-        )
-    else:
-        st.session_state.vk_creative_agree = st.checkbox(
-            "Согласен(на), чтобы команда hh подготовила креативы",
-            value=st.session_state.vk_creative_agree,
-            disabled=False,
-        )
-        st.caption("Сноска: демо-картинка ниже — пример направления, финальный вид зависит от модерации и формата.")
+        def show_text_variants(platform_key: str):
+            gen = ss_get("generated_texts", {}).get(platform_key)
+            if gen:
+                if gen.get("data") and isinstance(gen["data"], dict) and "variants" in gen["data"]:
+                    variants = gen["data"]["variants"]
+                    for i, v in enumerate(variants, start=1):
+                        st.markdown(f"**Вариант {i}**")
+                        st.json(v, expanded=False)
+                else:
+                    st.markdown(gen.get("raw", ""))
+            else:
+                st.info("Тексты ещё не генерировались.")
 
+        def show_image(platform_key: str):
+            img = ss_get("generated_images", {}).get(platform_key)
+            if img:
+                st.image(img, caption="Демо-мокап (пример)", use_column_width=True)
+            else:
+                st.info("Демо-картинка ещё не генерировалась.")
 
-def platform_block_tgads():
-    disable_all = is_client_view()
+        def platform_demo_ui(platform_key: str):
+            # быстрый “ввод клиента” как карточка
+            st.markdown("### Тексты (как заполнено / или генерация)")
+            who_text = ss_get(f"who_text_{platform_key}", "hh")
+            if who_text == "client":
+                st.markdown("<span class='badge'>Клиент готовит тексты</span>", unsafe_allow_html=True)
 
-    st.markdown("## Telegram Ads")
+                if platform_key == "yandex":
+                    st.markdown("**Заголовок:** " + (ss_get("yandex_headline") or "—"))
+                    st.markdown("**Текст:** " + (ss_get("yandex_text") or "—"))
+                    fl = [x for x in ss_get("yandex_fastlinks", []) if x.strip()]
+                    st.markdown("**Быстрые ссылки:** " + (", ".join(fl) if fl else "—"))
 
-    st.markdown("### Тексты")
-    st.session_state.tgads_text_who = st.radio(
-        "Кто готовит тексты?",
-        options=["Клиент подготовит тексты", "Команда hh подготовит тексты"],
-        key="tgads_text_who",
-        horizontal=True,
-        disabled=disable_all,
-    )
+                elif platform_key == "vk":
+                    cta = ss_get("vk_cta", "Перейти")
+                    if cta == "Другое" and ss_get("vk_cta_custom"):
+                        cta = ss_get("vk_cta_custom")
+                    st.markdown("**Пост:**")
+                    st.write(ss_get("vk_post_text") or "—")
+                    st.markdown("**CTA:** " + (cta or "—"))
 
-    if st.session_state.tgads_text_who == "Клиент подготовит тексты":
-        st.session_state.tgads_text = st.text_area(
-            f"Текст сообщения (лимит {LIMITS['tgads_text']})",
-            value=st.session_state.tgads_text,
-            height=110,
-            disabled=disable_all,
-        )
-        st.caption(f"Осталось {remaining(LIMITS['tgads_text'], st.session_state.tgads_text)} символов")
+                elif platform_key == "tgads":
+                    st.write(ss_get("tgads_message_text") or "—")
+                    st.caption("CTA: " + (ss_get("tgads_cta") or "—"))
+
+                else:
+                    st.markdown("**УТП:** " + (ss_get("tgseed_key_message") or "—"))
+                    st.markdown("**Текст на изображении:** " + (ss_get("tgseed_image_text") or "—"))
+                    st.markdown("**Пост:**")
+                    st.write(ss_get("tgseed_post_text") or "—")
+
+            else:
+                st.markdown("<span class='badge'>Команда hh готовит тексты</span>", unsafe_allow_html=True)
+                consent = ss_get(f"consent_text_{platform_key}", False)
+                if not consent:
+                    st.warning("Нужно согласие на подготовку текстов командой hh (шаг 3).")
+                else:
+                    if st.button("🤖 Сгенерировать 5 вариантов текстов", key=f"gen_texts_{platform_key}", type="primary", use_container_width=True):
+                        try:
+                            with st.spinner("Генерируем варианты..."):
+                                res = generate_texts_for(platform_key)
+                                st.session_state["generated_texts"][platform_key] = res
+                                st.success("Готово.")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
+
+                    show_text_variants(platform_key)
+
+            st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+            st.markdown("### Демо-визуал (как может выглядеть)")
+            who_cre = ss_get(f"who_creative_{platform_key}", "hh")
+            if who_cre == "client":
+                st.markdown("<span class='badge'>Клиент предоставляет материалы</span>", unsafe_allow_html=True)
+                st.caption("Здесь можно показать только мокап-демо. Если нужны точные форматы — подключим PDF с требованиями.")
+                # всё равно можно дать демо-картинку как ориентацию
+                if st.button("🖼️ Сгенерировать демо-мокап", key=f"gen_img_{platform_key}", use_container_width=True):
+                    try:
+                        with st.spinner("Генерируем демо-картинку..."):
+                            img = generate_image_for(platform_key)
+                            st.session_state["generated_images"][platform_key] = img
+                            st.success("Готово.")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+                show_image(platform_key)
+            else:
+                st.markdown("<span class='badge'>Команда hh готовит креативы</span>", unsafe_allow_html=True)
+                consent = ss_get(f"consent_creative_{platform_key}", False)
+                if not consent:
+                    st.warning("Нужно согласие на подготовку креативов командой hh (шаг 3).")
+                else:
+                    if st.button("🖼️ Сгенерировать демо-мокап", key=f"gen_img2_{platform_key}", type="primary", use_container_width=True):
+                        try:
+                            with st.spinner("Генерируем демо-картинку..."):
+                                img = generate_image_for(platform_key)
+                                st.session_state["generated_images"][platform_key] = img
+                                st.success("Готово.")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
+                    show_image(platform_key)
+
+            st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+        for i, platform_key in enumerate(selected):
+            with tabs[i]:
+                platform_demo_ui(platform_key)
+
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
         st.markdown(
             """
-**Подсказки:**
-- Обращение на “вы”
-- 1–2 коротких предложения
-- Без CAPS LOCK и без лишних эмодзи
-- Без неподтверждённых обещаний
-- CTA в конце: “Подробнее”, “Перейти”, “Открыть”
-"""
-        )
-    else:
-        st.session_state.tgads_text_agree = st.checkbox(
-            "Согласен(на), чтобы команда hh подготовила тексты (5 вариантов)",
-            value=st.session_state.tgads_text_agree,
-            disabled=False,
-        )
-
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-
-    st.markdown("### Креативы")
-    st.session_state.tgads_creative_who = st.radio(
-        "Кто готовит креативы?",
-        options=["Клиент предоставит материалы", "Команда hh подготовит креативы"],
-        key="tgads_creative_who",
-        horizontal=True,
-        disabled=disable_all,
-    )
-
-    if st.session_state.tgads_creative_who == "Клиент предоставит материалы":
-        st.session_state.tgads_materials = st.text_area(
-            "Ссылки на материалы",
-            value=st.session_state.tgads_materials,
-            height=80,
-            placeholder="Ссылки на исходники/диск/фигму/креативы",
-            disabled=disable_all,
-        )
-    else:
-        st.session_state.tgads_creative_agree = st.checkbox(
-            "Согласен(на), чтобы команда hh подготовила креативы",
-            value=st.session_state.tgads_creative_agree,
-            disabled=False,
-        )
-        st.caption("Сноска: демо-картинка ниже — пример направления, финальный вид зависит от модерации и формата.")
-
-
-if st.session_state.step == 3:
-    header_block(
-        "Экран 3. Площадка = отдельная вкладка",
-        "Для каждой площадки: тексты + креативы (кто делает) + поля при необходимости",
-    )
-
-    if not st.session_state.platforms_selected:
-        st.warning("Сначала выберите площадки на Экран 2.")
-    else:
-        tabs = st.tabs(st.session_state.platforms_selected)
-        for i, p in enumerate(st.session_state.platforms_selected):
-            with tabs[i]:
-                if p == "Яндекс":
-                    platform_block_yandex()
-                elif p == "VK":
-                    platform_block_vk()
-                elif p == "Telegram Ads":
-                    platform_block_tgads()
-
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("← Назад", use_container_width=True):
-            set_step(2)
-    with c2:
-        if st.button("Демо-превью →", type="primary", use_container_width=True):
-            set_step(4)
-
-
-# =========================
-# SCREEN 4 — DEMO + GENERATION
-# =========================
-def render_demo_yandex():
-    # Текст для демо: либо из полей клиента, либо из AI (если есть), либо плейсхолдер
-    if st.session_state.yandex_title.strip() or st.session_state.yandex_text.strip():
-        demo_title = st.session_state.yandex_title.strip() or "—"
-        demo_text = st.session_state.yandex_text.strip() or "—"
-        ql = [x.strip() for x in st.session_state.yandex_quicklinks.splitlines() if x.strip()]
-    else:
-        ai = st.session_state.ai_texts.get("Яндекс", "")
-        demo_sample = pick_first_variant(ai) or ""
-        demo_title = "Пример заголовка"
-        demo_text = demo_sample if demo_sample else "Пример текста объявления"
-        ql = ["https://example.com", "https://example.com/jobs"]
-
-    demo_card(
-        "Яндекс",
-        [
-            f"**Заголовок:** {demo_title}",
-            f"**Текст:** {demo_text}",
-            f"**Быстрые ссылки:** " + (" / ".join(ql) if ql else "—"),
-        ],
-    )
-
-    img = st.session_state.ai_images.get("Яндекс")
-    if img:
-        st.write("")
-        st.image(img, use_container_width=True)
-    else:
-        st.caption("Демо-картинка не сгенерирована (можно сгенерировать кнопкой ниже).")
-
-
-def render_demo_vk():
-    cta = st.session_state.vk_cta_custom.strip() or st.session_state.vk_cta
-
-    demo_text = st.session_state.vk_post_text.strip()
-    if not demo_text:
-        ai = st.session_state.ai_texts.get("VK", "")
-        demo_text = pick_first_variant(ai) or "Пример текста поста (2–3 строки)"
-
-    demo_card(
-        "VK",
-        [
-            "(картинка/баннер сверху — пример ниже)",
-            f"**Текст поста:** {demo_text}",
-            f"**CTA:** {cta or '—'}",
-        ],
-    )
-
-    img = st.session_state.ai_images.get("VK")
-    if img:
-        st.write("")
-        st.image(img, use_container_width=True)
-    else:
-        st.caption("Демо-картинка не сгенерирована (можно сгенерировать кнопкой ниже).")
-
-
-def render_demo_tgads():
-    demo_text = st.session_state.tgads_text.strip()
-    if not demo_text:
-        ai = st.session_state.ai_texts.get("Telegram Ads", "")
-        demo_text = pick_first_variant(ai) or "Пример сообщения: 1–2 коротких предложения. Подробнее"
-
-    demo_card(
-        "Telegram Ads",
-        [
-            "**Channel:** Бренд",
-            "**Sponsored**",
-            f"**Текст:** {demo_text}",
-            "**CTA:** Подробнее / Перейти / Открыть",
-        ],
-    )
-
-    img = st.session_state.ai_images.get("Telegram Ads")
-    if img:
-        st.write("")
-        st.image(img, use_container_width=True)
-    else:
-        st.caption("Демо-картинка не сгенерирована (можно сгенерировать кнопкой ниже).")
-
-
-def generate_texts_for_platform(platform: str):
-    if platform == "Яндекс":
-        prompt = prompt_text_yandex()
-    elif platform == "VK":
-        cta = st.session_state.vk_cta_custom.strip() or st.session_state.vk_cta
-        prompt = prompt_text_vk(cta)
-    else:  # Telegram Ads
-        prompt = prompt_text_tgads()
-
-    out = openrouter_chat(prompt, model=TEXT_MODEL)
-    st.session_state.ai_texts[platform] = out
-
-
-def generate_image_for_platform(platform: str):
-    if platform == "Яндекс":
-        prompt = prompt_image_yandex()
-        note, img = openrouter_image(prompt, aspect_ratio="1:1", image_size="1K")
-    elif platform == "VK":
-        prompt = prompt_image_vk()
-        note, img = openrouter_image(prompt, aspect_ratio="1:1", image_size="1K")
-    else:
-        prompt = prompt_image_tgads()
-        note, img = openrouter_image(prompt, aspect_ratio="1:1", image_size="1K")
-
-    st.session_state.ai_notes[platform] = note
-    if img:
-        st.session_state.ai_images[platform] = img
-
-
-def build_payload() -> dict:
-    return {
-        "meta": {
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "mode": st.session_state.mode,
-        },
-        "base": {
-            "what": st.session_state.base_what,
-            "goal": st.session_state.base_goal,
-            "landing_url": st.session_state.base_url,
-            "geo": st.session_state.base_geo,
-            "ta": st.session_state.base_ta,
-            "offer": st.session_state.base_offer,
-            "files": st.session_state.base_files,
-            "contact": st.session_state.base_contact,
-        },
-        "platforms_selected": st.session_state.platforms_selected,
-        "platforms": {
-            "yandex": {
-                "texts_who": st.session_state.yandex_text_who,
-                "creatives_who": st.session_state.yandex_creative_who,
-                "title": st.session_state.yandex_title,
-                "text": st.session_state.yandex_text,
-                "quicklinks": st.session_state.yandex_quicklinks,
-                "metrika_id": st.session_state.yandex_metrika_id,
-                "goals": st.session_state.yandex_goals,
-                "materials": st.session_state.yandex_materials,
-                "agree_texts": st.session_state.yandex_text_agree,
-                "agree_creatives": st.session_state.yandex_creative_agree,
-            },
-            "vk": {
-                "texts_who": st.session_state.vk_text_who,
-                "creatives_who": st.session_state.vk_creative_who,
-                "post_text": st.session_state.vk_post_text,
-                "cta": st.session_state.vk_cta_custom.strip() or st.session_state.vk_cta,
-                "materials": st.session_state.vk_materials,
-                "agree_texts": st.session_state.vk_text_agree,
-                "agree_creatives": st.session_state.vk_creative_agree,
-            },
-            "tgads": {
-                "texts_who": st.session_state.tgads_text_who,
-                "creatives_who": st.session_state.tgads_creative_who,
-                "text": st.session_state.tgads_text,
-                "materials": st.session_state.tgads_materials,
-                "agree_texts": st.session_state.tgads_text_agree,
-                "agree_creatives": st.session_state.tgads_creative_agree,
-            },
-        },
-        "ai_outputs": {
-            "texts": st.session_state.ai_texts,
-            "notes": st.session_state.ai_notes,
-            "images_present": {k: bool(v) for k, v in st.session_state.ai_images.items()},
-        },
-    }
-
-
-if st.session_state.step == 4:
-    header_block("Экран 4. Демо-превью + генерация", "Демо-пример, финальный вид зависит от модерации и формата.")
-
-    st.markdown(
-        """
-<span class="badge">подпись везде</span><br>
-<i>“Демо-пример, финальный вид зависит от модерации и формата.”</i>
-""",
-        unsafe_allow_html=True,
-    )
-
-    if not st.session_state.platforms_selected:
-        st.warning("Нет выбранных площадок.")
-    else:
-        tabs = st.tabs(st.session_state.platforms_selected)
-
-        for i, platform in enumerate(st.session_state.platforms_selected):
-            with tabs[i]:
-                # кнопки генерации
-                b1, b2, b3 = st.columns([1, 1, 2])
-                with b1:
-                    if st.button("🤖 5 текстов", key=f"gen_texts_{platform}", use_container_width=True):
-                        with st.spinner("Генерируем тексты…"):
-                            generate_texts_for_platform(platform)
-                        st.success("Готово: тексты сгенерированы.")
-                with b2:
-                    if st.button("🖼️ Демо-картинка", key=f"gen_img_{platform}", use_container_width=True):
-                        with st.spinner("Генерируем демо-картинку…"):
-                            generate_image_for_platform(platform)
-                        st.success("Готово: демо-картинка сгенерирована.")
-                with b3:
-                    if st.button("♻️ Очистить генерации", key=f"clear_{platform}", use_container_width=True):
-                        st.session_state.ai_texts.pop(platform, None)
-                        st.session_state.ai_images.pop(platform, None)
-                        st.session_state.ai_notes.pop(platform, None)
-                        st.rerun()
-
-                # демо карточка + картинка
-                st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-
-                if platform == "Яндекс":
-                    render_demo_yandex()
-                elif platform == "VK":
-                    render_demo_vk()
-                else:
-                    render_demo_tgads()
-
-                # показать сгенерированные тексты (если есть)
-                ai_txt = st.session_state.ai_texts.get(platform)
-                if ai_txt:
-                    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-                    with st.expander("Показать 5 сгенерированных вариантов текста", expanded=False):
-                        st.write(ai_txt)
-
-                # показать note от image модели (если есть)
-                note = st.session_state.ai_notes.get(platform)
-                if note:
-                    with st.expander("Пояснение модели к демо-картинке", expanded=False):
-                        st.write(note)
-
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-
-    # Финальный блок
-    st.markdown("### Финальный блок")
-    st.markdown(
-        """
-<div class="kv">
-Если вам нравится направление, в течение <b>2–3 рабочих дней</b> мы пришлём <b>5 вариантов</b> на выбор для согласования.<br>
-Демо — пример, финальный вид зависит от модерации и формата.
+<div class="card">
+  <div class="card-title">Финальный блок</div>
+  <div class="small-muted">
+    Если вам нравится направление — передаём в команду hh.
+    В течение <b>2–3 рабочих дней</b> пришлём 5 вариантов на выбор для согласования.
+  </div>
 </div>
 """,
-        unsafe_allow_html=True,
-    )
-
-    payload = build_payload()
-    payload_json = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c1:
-        if st.button("← Назад", use_container_width=True):
-            set_step(3)
-
-    with c2:
-        st.download_button(
-            "Скачать заявку (JSON)",
-            data=payload_json,
-            file_name=f"hh_segments_brief_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json",
-            use_container_width=True,
+            unsafe_allow_html=True,
         )
 
-    with c3:
-        if st.button("Передать в команду hh", type="primary", use_container_width=True):
-            st.session_state.submitted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            st.success(f"Готово! Заявка сформирована ({st.session_state.submitted_at}).")
-            with st.expander("Показать заявку для копирования"):
-                st.code(payload_json.decode("utf-8"), language="json")
-
-
-# =========================
-# FOOTER
-# =========================
-st.markdown(
-    """
-<div style="text-align:center; color:#6b7280; padding:18px 0;">
-  <span class="badge">hh segments brief • streamlit</span>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("← Назад", use_container_width=True):
+                go_step(3)
+        with c2:
+            st.download_button(
+                "📤 Скачать заявку и передать в команду hh (txt)",
+                data=make_brief_summary(),
+                file_name=f"hh_segments_brief_FINAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
