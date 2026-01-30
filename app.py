@@ -79,9 +79,7 @@ st.markdown(
 DEFAULTS = {
     # navigation
     "nav_page": "0. Старт",
-    # internal persistence store (helps prevent accidental resets on reruns/navigation)
-    "_persist": {},
-    # Screen 1
+    # internal persistence store (helps prevent accidental resets on reruns/navigation)    # Screen 1
     "what_advertise": "",
     "campaign_goal": "",
     "landing_url": "",
@@ -139,42 +137,11 @@ for k, v in DEFAULTS.items():
 
 
 # -----------------------------
-# Persistence (fix: fields reset when navigating)
+# Persistence
 # -----------------------------
-PERSIST_KEYS = [k for k in DEFAULTS.keys() if k not in {"nav_page", "demo_images", "_persist"}]
-
-
-def persist_restore(keys):
-    """Restore values from st.session_state._persist if widgets unexpectedly reset to defaults."""
-    store = st.session_state.get("_persist", {}) or {}
-    for k in keys:
-        if k not in store:
-            continue
-        cur = st.session_state.get(k)
-        default = DEFAULTS.get(k)
-        # Restore only when current value looks like 'default' but we have a non-default saved value
-        if isinstance(cur, str):
-            if (cur or "") == "" and (store[k] or "") != "":
-                st.session_state[k] = store[k]
-        else:
-            if cur == default and store[k] != default:
-                st.session_state[k] = store[k]
-
-
-def persist_save(keys):
-    """Mirror current values into st.session_state._persist.
-
-    We also persist default/empty values, otherwise checkboxes can "snap back"
-    after unchecking (old non-default value would be restored).
-    """
-    store = st.session_state.get("_persist", {}) or {}
-    for k in keys:
-        store[k] = st.session_state.get(k)
-    st.session_state["_persist"] = store
-
-
-# Restore before any widgets are rendered
-persist_restore(PERSIST_KEYS)
+# В Streamlit значения виджетов живут в st.session_state и не должны сбрасываться при переходах.
+# Ручной restore приводил к «прилипанию» чекбоксов/форматов (после снятия они возвращались обратно).
+# Поэтому убираем принудительное восстановление и полагаемся на st.session_state.
 
 
 # -----------------------------
@@ -820,11 +787,7 @@ def screen_3():
                 st.error("Не удалось сгенерировать тексты. Ниже — причина(ы).")
 
             if logs:
-                st.code("
-".join(logs))
-
-            persist_save(PERSIST_KEYS)
-
+                st.code("\\n".join(logs))
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
     # -------- Yandex --------
@@ -1233,4 +1196,3 @@ elif current_page == "4. Примерный вид объявлений":
     screen_4()
 
 # Persist snapshot at the end of the run (prevents accidental resets on navigation)
-persist_save(PERSIST_KEYS)
