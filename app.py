@@ -131,6 +131,18 @@ DEFAULTS = {
     "demo_images": {},  # key: "platform|format" -> data_url
 }
 
+# Streamlit может очищать state у «исчезающих» виджетов (когда вы уходите на другой шаг и виджеты
+# с этими ключами больше не рендерятся). Из‑за этого данные могут «сбрасываться» при навигации.
+# Решение: держим отдельное устойчивое хранилище и восстанавливаем значения до создания виджетов.
+if "_persist" not in st.session_state:
+    st.session_state["_persist"] = {}
+
+# Restore from persistent snapshot (only when key is missing)
+for k in DEFAULTS.keys():
+    if k not in st.session_state and k in st.session_state["_persist"]:
+        st.session_state[k] = st.session_state["_persist"][k]
+
+# Apply defaults
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -241,7 +253,15 @@ def openrouter_api_key() -> str:
         return ""
 
 
-def openrouter_chat(model: str, prompt: str, modalities=None, image_config=None, temperature=0.6, max_tokens=1200):
+def openrouter_chat(
+    model: str,
+    prompt: str,
+    modalities=None,
+    image_config=None,
+    provider=None,
+    temperature=0.6,
+    max_tokens=1200,
+):
     api_key = openrouter_api_key()
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY не задан в Secrets")
@@ -263,6 +283,8 @@ def openrouter_chat(model: str, prompt: str, modalities=None, image_config=None,
         payload["modalities"] = modalities
     if image_config:
         payload["image_config"] = image_config
+    if provider:
+        payload["provider"] = provider
 
     r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=90)
     if r.status_code != 200:
@@ -286,6 +308,32 @@ def openrouter_chat(model: str, prompt: str, modalities=None, image_config=None,
 
 def openrouter_text_model() -> str:
     return (st.secrets.get("OPENROUTER_TEXT_MODEL", "") or "").strip() or "google/gemini-flash-1.5"
+
+
+def openrouter_provider_prefs(for_images: bool = False) -> dict:
+    """Provider routing prefs.
+
+    Позволяет «обойти» случай, когда в аккаунте включён BYOK-провайдер с
+    ‘Always use for this provider’ и из-за этого запросы пытаются уйти в провайдера,
+    где нет нужной модели/модальности.
+
+    Можно дополнительно задать в Secrets:
+      OPENROUTER_PROVIDER_IGNORE = "google, vertex" (через запятую)
+    """
+
+    ignore_raw = (st.secrets.get("OPENROUTER_PROVIDER_IGNORE", "") or "").strip()
+    ignore = [x.strip() for x in ignore_raw.split(",") if x.strip()]
+
+    prefs = {
+        "allow_fallbacks": True,
+        "sort": "price",
+    }
+    if ignore:
+        prefs["ignore"] = ignore
+    if for_images:
+        # Для image-generation важно, чтобы провайдер понимал параметры multimodal
+        prefs["require_parameters"] = True
+    return prefs
 
 
 def _extract_json_obj(text: str) -> dict:
@@ -348,7 +396,7 @@ def ai_generate_one_text(platform: str) -> dict:
 Верни JSON формата:
 {{\"title\":\"...\",\"body\":\"...\"}}
 """
-        data = openrouter_chat(model=model, prompt=prompt, temperature=0.4, max_tokens=260)
+        data = openrouter_chat(model=model, prompt=prompt, provider=openrouter_provider_prefs(), temperature=0.4, max_tokens=260)
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
         obj = _extract_json_obj(content)
         return {"title": _clamp(obj.get("title", ""), 56), "body": _clamp(obj.get("body", ""), 81)}
@@ -365,7 +413,7 @@ CTA из списка: Перейти / Подробнее / Открыть / О
 Верни JSON формата:
 {{\"post\":\"...\",\"cta\":\"Подробнее\"}}
 """
-        data = openrouter_chat(model=model, prompt=prompt, temperature=0.5, max_tokens=520)
+        data = openrouter_chat(model=model, prompt=prompt, provider=openrouter_provider_prefs(), temperature=0.5, max_tokens=520)
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
         obj = _extract_json_obj(content)
         return {"post": _clamp(obj.get("post", ""), 700), "cta": _clamp(obj.get("cta", "Подробнее"), 30) or "Подробнее"}
@@ -382,7 +430,7 @@ CTA из списка: Подробнее / Перейти / Открыть.
 Верни JSON формата:
 {{\"message\":\"...\",\"cta\":\"Подробнее\"}}
 """
-        data = openrouter_chat(model=model, prompt=prompt, temperature=0.6, max_tokens=320)
+        data = openrouter_chat(model=model, prompt=prompt, provider=openrouter_provider_prefs(), temperature=0.6, max_tokens=320)
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
         obj = _extract_json_obj(content)
         return {"message": _clamp(obj.get("message", ""), 200), "cta": _clamp(obj.get("cta", "Подробнее"), 30) or "Подробнее"}
@@ -398,7 +446,7 @@ CTA из списка: Подробнее / Перейти / Открыть.
 Верни JSON формата:
 {{\"image_text\":\"...\",\"post\":\"...\"}}
 """
-    data = openrouter_chat(model=model, prompt=prompt, temperature=0.7, max_tokens=720)
+    data = openrouter_chat(model=model, prompt=prompt, provider=openrouter_provider_prefs(), temperature=0.7, max_tokens=720)
     content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
     obj = _extract_json_obj(content)
     return {"image_text": _clamp(obj.get("image_text", ""), 40), "post": _clamp(obj.get("post", ""), 500)}
@@ -469,22 +517,31 @@ def _extract_image_url_from_openrouter_response(data: dict) -> str:
 def generate_demo_image(prompt: str, aspect_ratio="16:9", image_size="1K"):
     """Generate one demo image; tries primary model, then fallbacks.
 
-    OpenRouter recommends requesting both modalities: ["image", "text"].
-    Some providers/models can work only with ["image"], so we try both.
+    Некоторые image-модели поддерживают только output=image, без text.
+    Поэтому пробуем несколько вариантов параметра modalities.
     """
+
     last_err = None
 
     for model in image_model_candidates():
         try:
-            # Try recommended modalities first, then narrower
-            for mods in (["image", "text"], ["image"]):
+            # Flux часто работает в режиме image-only — пробуем его первым.
+            if "flux" in model.lower():
+                mods_order = (["image"], ["image", "text"], None)
+            else:
+                mods_order = (["image", "text"], ["image"], None)
+
+            for mods in mods_order:
                 kwargs = {
                     "model": model,
                     "prompt": prompt,
-                    "modalities": mods,
+                    "provider": openrouter_provider_prefs(for_images=True),
                     "temperature": 0.2,
                     "max_tokens": 300,
                 }
+
+                if mods is not None:
+                    kwargs["modalities"] = mods
 
                 # image_config is documented mainly for Gemini; other models may ignore or error
                 if "gemini" in model.lower():
@@ -493,10 +550,13 @@ def generate_demo_image(prompt: str, aspect_ratio="16:9", image_size="1K"):
                 try:
                     data = openrouter_chat(**kwargs)
                 except Exception as e:
-                    if "requested output modalities" in str(e).lower() and mods == ["image", "text"]:
+                    # Если нет провайдеров под requested modalities — пробуем следующий вариант
+                    msg = str(e).lower()
+                    if "requested output modalities" in msg and mods is not None:
                         last_err = e
                         continue
-                    raise
+                    last_err = e
+                    continue
 
                 url = _extract_image_url_from_openrouter_response(data)
                 if url:
@@ -511,7 +571,6 @@ def generate_demo_image(prompt: str, aspect_ratio="16:9", image_size="1K"):
     if last_err:
         raise last_err
     return None
-
 
 # -----------------------------
 # Sidebar (progress + navigation)
@@ -787,7 +846,7 @@ def screen_3():
                 st.error("Не удалось сгенерировать тексты. Ниже — причина(ы).")
 
             if logs:
-                st.code("\\n".join(logs))
+                st.code("\n".join(logs))
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
     # -------- Yandex --------
@@ -1196,3 +1255,11 @@ elif current_page == "4. Примерный вид объявлений":
     screen_4()
 
 # Persist snapshot at the end of the run (prevents accidental resets on navigation)
+try:
+    for k in DEFAULTS.keys():
+        # Не затираем сохранённые значения, если ключ «пропал» из-за того,
+        # что соответствующий виджет не рендерился на текущем шаге.
+        if k in st.session_state:
+            st.session_state["_persist"][k] = st.session_state[k]
+except Exception:
+    pass
