@@ -78,6 +78,8 @@ st.markdown(
 DEFAULTS = {
     # navigation
     "nav_page": "0. Старт",
+    # internal persistence store (helps prevent accidental resets on reruns/navigation)
+    "_persist": {},
     # Screen 1
     "what_advertise": "",
     "campaign_goal": "",
@@ -133,6 +135,48 @@ DEFAULTS = {
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+
+# -----------------------------
+# Persistence (fix: fields reset when navigating)
+# -----------------------------
+PERSIST_KEYS = [k for k in DEFAULTS.keys() if k not in {"nav_page", "demo_images", "_persist"}]
+
+
+def persist_restore(keys):
+    """Restore values from st.session_state._persist if widgets unexpectedly reset to defaults."""
+    store = st.session_state.get("_persist", {}) or {}
+    for k in keys:
+        if k not in store:
+            continue
+        cur = st.session_state.get(k)
+        default = DEFAULTS.get(k)
+        # Restore only when current value looks like 'default' but we have a non-default saved value
+        if isinstance(cur, str):
+            if (cur or "") == "" and (store[k] or "") != "":
+                st.session_state[k] = store[k]
+        else:
+            if cur == default and store[k] != default:
+                st.session_state[k] = store[k]
+
+
+def persist_save(keys):
+    """Save only meaningful (non-default) values into st.session_state._persist."""
+    store = st.session_state.get("_persist", {}) or {}
+    for k in keys:
+        v = st.session_state.get(k)
+        d = DEFAULTS.get(k)
+        if isinstance(v, str):
+            if (v or "").strip() != "":
+                store[k] = v
+        else:
+            if v != d:
+                store[k] = v
+    st.session_state["_persist"] = store
+
+
+# Restore before any widgets are rendered
+persist_restore(PERSIST_KEYS)
 
 
 # -----------------------------
@@ -885,3 +929,6 @@ elif current_page == "3. Тексты и креативы":
     screen_3()
 elif current_page == "4. Примерный вид объявлений":
     screen_4()
+
+# Persist snapshot at the end of the run (prevents accidental resets on navigation)
+persist_save(PERSIST_KEYS)
