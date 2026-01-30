@@ -175,6 +175,13 @@ def persist_save(keys):
     st.session_state["_persist"] = store
 
 
+def persist_one(key: str):
+    """Persist a single key immediately (used in on_change to avoid 'checkbox snaps back')."""
+    store = st.session_state.get("_persist", {}) or {}
+    store[key] = st.session_state.get(key)
+    st.session_state["_persist"] = store
+
+
 # Restore before any widgets are rendered
 persist_restore(PERSIST_KEYS)
 
@@ -481,30 +488,30 @@ def screen_2():
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Площадки")
-        st.checkbox("Яндекс", key="pl_yandex")
-        st.checkbox("VK", key="pl_vk")
-        st.checkbox("Telegram Ads", key="pl_tgads")
-        st.checkbox("Telegram посевы", key="pl_tgseeding")
+        st.checkbox("Яндекс", key="pl_yandex", on_change=persist_one, args=("pl_yandex",))
+        st.checkbox("VK", key="pl_vk", on_change=persist_one, args=("pl_vk",))
+        st.checkbox("Telegram Ads", key="pl_tgads", on_change=persist_one, args=("pl_tgads",))
+        st.checkbox("Telegram посевы", key="pl_tgseeding", on_change=persist_one, args=("pl_tgseeding",))
 
     with col2:
         st.subheader("Форматы (по площадкам)")
         if st.session_state.pl_yandex:
             st.markdown("**Яндекс**")
-            st.checkbox("Изображение", key="fmt_yandex_img")
-            st.checkbox("Видео", key="fmt_yandex_video")
+            st.checkbox("Изображение", key="fmt_yandex_img", on_change=persist_one, args=("fmt_yandex_img",))
+            st.checkbox("Видео", key="fmt_yandex_video", on_change=persist_one, args=("fmt_yandex_video",))
             st.markdown("")
 
         if st.session_state.pl_vk:
             st.markdown("**VK**")
-            st.checkbox("Изображение", key="fmt_vk_img")
-            st.checkbox("Видео", key="fmt_vk_video")
+            st.checkbox("Изображение", key="fmt_vk_img", on_change=persist_one, args=("fmt_vk_img",))
+            st.checkbox("Видео", key="fmt_vk_video", on_change=persist_one, args=("fmt_vk_video",))
             st.markdown("")
 
         if st.session_state.pl_tgads:
             st.markdown("**Telegram Ads**")
-            st.checkbox("Текст", key="fmt_tg_text")
-            st.checkbox("Изображение", key="fmt_tg_img")
-            st.checkbox("Видео", key="fmt_tg_video")
+            st.checkbox("Текст", key="fmt_tg_text", on_change=persist_one, args=("fmt_tg_text",))
+            st.checkbox("Изображение", key="fmt_tg_img", on_change=persist_one, args=("fmt_tg_img",))
+            st.checkbox("Видео", key="fmt_tg_video", on_change=persist_one, args=("fmt_tg_video",))
             st.markdown("")
 
         if st.session_state.pl_tgseeding:
