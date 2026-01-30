@@ -162,24 +162,14 @@ def persist_restore(keys):
 
 
 def persist_save(keys):
-    """Save only meaningful (non-default) values into st.session_state._persist."""
+    """Mirror current values into st.session_state._persist.
+
+    We also persist default/empty values, otherwise checkboxes can "snap back"
+    after unchecking (old non-default value would be restored).
+    """
     store = st.session_state.get("_persist", {}) or {}
     for k in keys:
-        v = st.session_state.get(k)
-        d = DEFAULTS.get(k)
-        if isinstance(v, str):
-            if (v or "").strip() != "":
-                store[k] = v
-        else:
-            if v != d:
-                store[k] = v
-    st.session_state["_persist"] = store
-
-
-def persist_one(key: str):
-    """Persist a single key immediately (used in on_change to avoid 'checkbox snaps back')."""
-    store = st.session_state.get("_persist", {}) or {}
-    store[key] = st.session_state.get(key)
+        store[k] = st.session_state.get(k)
     st.session_state["_persist"] = store
 
 
@@ -309,7 +299,21 @@ def openrouter_chat(model: str, prompt: str, modalities=None, image_config=None,
 
     r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=90)
     if r.status_code != 200:
-        raise RuntimeError(f"OpenRouter API error {r.status_code}: {r.text[:500]}")
+        txt = (r.text or "")[:800]
+        tip = ""
+        low = txt.lower()
+        if "no endpoints found" in low:
+            tip = (
+                " | Подсказка: если в OpenRouter включён BYOK-провайдер с опцией "
+                "‘Always use for this provider’, отключите её (иначе запросы могут пытаться уйти в провайдера, "
+                "который не поддерживает модель). Также проверьте модель в Secrets."
+            )
+        if "key validation failed" in low or "quota" in low:
+            tip = (
+                " | Подсказка: похоже, BYOK-ключ провайдера упирается в квоту/биллинг. "
+                "Отключите BYOK (или ‘Always use…’) либо используйте провайдеры OpenRouter."
+            )
+        raise RuntimeError(f"OpenRouter API error {r.status_code}: {txt}{tip}")
     return r.json()
 
 
@@ -442,8 +446,8 @@ def image_model_candidates():
     # Sane defaults if user didn't set fallbacks
     if not fallbacks:
         fallbacks = [
-            "black-forest-labs/flux.2-flex",
             "black-forest-labs/flux.2-pro",
+            "openai/gpt-image-1",
         ]
 
     # De-duplicate
@@ -463,11 +467,13 @@ def _extract_image_url_from_openrouter_response(data: dict) -> str:
 
     msg = (data["choices"][0] or {}).get("message", {}) or {}
 
-    # Preferred: message.images (per OpenRouter docs)
+    # Preferred: message.images
     images = msg.get("images") or []
     if images:
         try:
-            url = images[0]["image_url"]["url"]
+            img0 = images[0] or {}
+            url_obj = img0.get("image_url") or img0.get("imageUrl") or {}
+            url = url_obj.get("url")
             return url or ""
         except Exception:
             pass
@@ -476,8 +482,11 @@ def _extract_image_url_from_openrouter_response(data: dict) -> str:
     content = msg.get("content")
     if isinstance(content, list):
         for part in content:
-            if isinstance(part, dict) and part.get("type") == "image_url":
-                url = (part.get("image_url") or {}).get("url", "")
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "image_url":
+                url_obj = part.get("image_url") or part.get("imageUrl") or {}
+                url = (url_obj or {}).get("url", "")
                 if url:
                     return url
 
@@ -491,29 +500,42 @@ def _extract_image_url_from_openrouter_response(data: dict) -> str:
 
 
 def generate_demo_image(prompt: str, aspect_ratio="16:9", image_size="1K"):
-    """Generate one demo image; tries primary model, then fallbacks."""
+    """Generate one demo image; tries primary model, then fallbacks.
+
+    OpenRouter recommends requesting both modalities: ["image", "text"].
+    Some providers/models can work only with ["image"], so we try both.
+    """
     last_err = None
 
     for model in image_model_candidates():
         try:
-            kwargs = {
-                "model": model,
-                "prompt": prompt,
-                "modalities": ["image", "text"],
-                "temperature": 0.2,
-                "max_tokens": 300,
-            }
+            # Try recommended modalities first, then narrower
+            for mods in (["image", "text"], ["image"]):
+                kwargs = {
+                    "model": model,
+                    "prompt": prompt,
+                    "modalities": mods,
+                    "temperature": 0.2,
+                    "max_tokens": 300,
+                }
 
-            # image_config (aspect_ratio/image_size) is documented mainly for Gemini; other models may ignore or error
-            if "gemini" in model.lower():
-                kwargs["image_config"] = {"aspect_ratio": aspect_ratio, "image_size": image_size}
+                # image_config is documented mainly for Gemini; other models may ignore or error
+                if "gemini" in model.lower():
+                    kwargs["image_config"] = {"aspect_ratio": aspect_ratio, "image_size": image_size}
 
-            data = openrouter_chat(**kwargs)
-            url = _extract_image_url_from_openrouter_response(data)
-            if url:
-                return url
+                try:
+                    data = openrouter_chat(**kwargs)
+                except Exception as e:
+                    if "requested output modalities" in str(e).lower() and mods == ["image", "text"]:
+                        last_err = e
+                        continue
+                    raise
 
-            last_err = RuntimeError(f"No image returned by model: {model}")
+                url = _extract_image_url_from_openrouter_response(data)
+                if url:
+                    return url
+
+                last_err = RuntimeError(f"No image returned by model: {model}")
 
         except Exception as e:
             last_err = e
@@ -683,30 +705,30 @@ def screen_2():
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Площадки")
-        st.checkbox("Яндекс", key="pl_yandex", on_change=persist_one, args=("pl_yandex",))
-        st.checkbox("VK", key="pl_vk", on_change=persist_one, args=("pl_vk",))
-        st.checkbox("Telegram Ads", key="pl_tgads", on_change=persist_one, args=("pl_tgads",))
-        st.checkbox("Telegram посевы", key="pl_tgseeding", on_change=persist_one, args=("pl_tgseeding",))
+        st.checkbox("Яндекс", key="pl_yandex")
+        st.checkbox("VK", key="pl_vk")
+        st.checkbox("Telegram Ads", key="pl_tgads")
+        st.checkbox("Telegram посевы", key="pl_tgseeding")
 
     with col2:
         st.subheader("Форматы (по площадкам)")
         if st.session_state.pl_yandex:
             st.markdown("**Яндекс**")
-            st.checkbox("Изображение", key="fmt_yandex_img", on_change=persist_one, args=("fmt_yandex_img",))
-            st.checkbox("Видео", key="fmt_yandex_video", on_change=persist_one, args=("fmt_yandex_video",))
+            st.checkbox("Изображение", key="fmt_yandex_img")
+            st.checkbox("Видео", key="fmt_yandex_video")
             st.markdown("")
 
         if st.session_state.pl_vk:
             st.markdown("**VK**")
-            st.checkbox("Изображение", key="fmt_vk_img", on_change=persist_one, args=("fmt_vk_img",))
-            st.checkbox("Видео", key="fmt_vk_video", on_change=persist_one, args=("fmt_vk_video",))
+            st.checkbox("Изображение", key="fmt_vk_img")
+            st.checkbox("Видео", key="fmt_vk_video")
             st.markdown("")
 
         if st.session_state.pl_tgads:
             st.markdown("**Telegram Ads**")
-            st.checkbox("Текст", key="fmt_tg_text", on_change=persist_one, args=("fmt_tg_text",))
-            st.checkbox("Изображение", key="fmt_tg_img", on_change=persist_one, args=("fmt_tg_img",))
-            st.checkbox("Видео", key="fmt_tg_video", on_change=persist_one, args=("fmt_tg_video",))
+            st.checkbox("Текст", key="fmt_tg_text")
+            st.checkbox("Изображение", key="fmt_tg_img")
+            st.checkbox("Видео", key="fmt_tg_video")
             st.markdown("")
 
         if st.session_state.pl_tgseeding:
@@ -755,6 +777,8 @@ def screen_3():
         elif not (st.session_state.what_advertise.strip() and st.session_state.segment_desc.strip() and st.session_state.landing_url.strip()):
             st.error("Заполните на шаге 1 минимум: «Что рекламируем», «Описание сегмента», «Посадочная ссылка». ")
         else:
+            logs = []
+            updated_any = False
             with st.spinner("Генерируем тексты…"):
                 for p in selected:
                     try:
@@ -762,29 +786,44 @@ def screen_3():
                         if p == "Яндекс":
                             if overwrite or not st.session_state.yandex_title.strip():
                                 st.session_state.yandex_title = out.get("title", st.session_state.yandex_title)
+                                updated_any = True
                             if overwrite or not st.session_state.yandex_body.strip():
                                 st.session_state.yandex_body = out.get("body", st.session_state.yandex_body)
+                                updated_any = True
                         elif p == "VK":
                             if overwrite or not st.session_state.vk_post_text.strip():
                                 st.session_state.vk_post_text = out.get("post", st.session_state.vk_post_text)
+                                updated_any = True
                             if overwrite or not (st.session_state.vk_cta or "").strip():
                                 st.session_state.vk_cta = out.get("cta", st.session_state.vk_cta)
+                                updated_any = True
                         elif p == "Telegram Ads":
                             if overwrite or not st.session_state.tg_message.strip():
                                 st.session_state.tg_message = out.get("message", st.session_state.tg_message)
+                                updated_any = True
                             if overwrite or not (st.session_state.tg_cta or "").strip():
                                 st.session_state.tg_cta = out.get("cta", st.session_state.tg_cta)
+                                updated_any = True
                         else:
                             if overwrite or not st.session_state.seed_image_text.strip():
                                 st.session_state.seed_image_text = out.get("image_text", st.session_state.seed_image_text)
+                                updated_any = True
                             if overwrite or not st.session_state.seed_post_text.strip():
                                 st.session_state.seed_post_text = out.get("post", st.session_state.seed_post_text)
+                                updated_any = True
                     except Exception as e:
-                        st.warning(f"{p}: не удалось сгенерировать ({e})")
+                        logs.append(f"{p}: {e}")
 
-            st.success("Готово! Тексты подставлены в поля ниже.")
+            if updated_any:
+                st.success("Готово! Тексты подставлены в поля ниже.")
+            else:
+                st.error("Не удалось сгенерировать тексты. Ниже — причина(ы).")
+
+            if logs:
+                st.code("
+".join(logs))
+
             persist_save(PERSIST_KEYS)
-            st.rerun()
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
@@ -1066,12 +1105,12 @@ def screen_4():
             st.caption(
                 "Сгенерируем по 1 демо-визуалу на выбранный формат (где уместно). "
                 "Модель можно менять через OPENROUTER_IMAGE_MODEL. "
-                "Если выбранный model BYOK — подключите ключ провайдера в OpenRouter, иначе увидите «No endpoints found…»."
+                "Если выбранный model BYOK — подключите ключ провайдера в OpenRouter, иначе увидите «No endpoints found…». Если включали BYOK с опцией ‘Always use for this provider’ — отключите её, чтобы запросы могли уйти в доступные провайдеры OpenRouter."
             )
             st.code(
                 """OPENROUTER_IMAGE_MODEL = \"black-forest-labs/flux.2-flex\"
 # (опционально) если основная модель недоступна — пробуем фоллбеки
-OPENROUTER_IMAGE_MODEL_FALLBACKS = \"black-forest-labs/flux.2-pro\"
+OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.2-pro, openai/gpt-image-1"
 """,
                 language="toml",
             )
