@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import re
+import json
 from urllib.parse import urlparse
 
 # -----------------------------
@@ -312,21 +313,215 @@ def openrouter_chat(model: str, prompt: str, modalities=None, image_config=None,
     return r.json()
 
 
-def generate_demo_image(prompt: str, aspect_ratio="16:9", image_size="1K"):
-    model = st.secrets.get("OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image-preview")
-    data = openrouter_chat(
-        model=model,
-        prompt=prompt,
-        modalities=["image", "text"],
-        image_config={"aspect_ratio": aspect_ratio, "image_size": image_size},
-        temperature=0.2,
-        max_tokens=300,
-    )
-    msg = data["choices"][0]["message"]
+def openrouter_text_model() -> str:
+    return (st.secrets.get("OPENROUTER_TEXT_MODEL", "") or "").strip() or "google/gemini-flash-1.5"
+
+
+def _extract_json_obj(text: str) -> dict:
+    """Parse JSON from model output. We prefer strict JSON, but tolerate extra wrapper text."""
+    if not text:
+        return {}
+    text = text.strip()
+
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = text[start : end + 1]
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            return {}
+
+    return {}
+
+
+def _clamp(s: str, limit: int) -> str:
+    s = (s or "").strip()
+    if limit and len(s) > limit:
+        s = s[:limit].rstrip()
+    return s
+
+
+def ai_generate_one_text(platform: str) -> dict:
+    """Generate exactly ONE set of texts for the chosen platform using ONLY Step-1 fields."""
+    base = {
+        "what_advertise": st.session_state.get("what_advertise", ""),
+        "campaign_goal": st.session_state.get("campaign_goal", ""),
+        "landing_url": st.session_state.get("landing_url", ""),
+        "geo": st.session_state.get("geo", ""),
+        "segment_desc": st.session_state.get("segment_desc", ""),
+        "files_links": st.session_state.get("files_links", ""),
+        "landing_context": st.session_state.get("landing_context", ""),
+    }
+
+    model = openrouter_text_model()
+
+    if platform == "Яндекс":
+        prompt = f"""Ты — PMM/копирайтер.
+Сгенерируй РОВНО 1 вариант текста для Яндекс объявлений.
+Верни ТОЛЬКО JSON без markdown и без пояснений.
+Лимиты: title ≤ 56 символов, body ≤ 81 символ.
+Стиль: нейтрально-деловой, без клише, без агрессии, без обещаний «гарантируем».
+
+Вводные (шаг 1): {json.dumps(base, ensure_ascii=False)}
+
+Верни JSON формата:
+{{\"title\":\"...\",\"body\":\"...\"}}
+"""
+        data = openrouter_chat(model=model, prompt=prompt, temperature=0.4, max_tokens=260)
+        content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        obj = _extract_json_obj(content)
+        return {"title": _clamp(obj.get("title", ""), 56), "body": _clamp(obj.get("body", ""), 81)}
+
+    if platform == "VK":
+        prompt = f"""Ты — PMM/копирайтер.
+Сгенерируй РОВНО 1 вариант нативного текста для поста VK.
+Верни ТОЛЬКО JSON без пояснений.
+Лимит: post ≤ 700 символов.
+CTA из списка: Перейти / Подробнее / Открыть / Откликнуться.
+
+Вводные (шаг 1): {json.dumps(base, ensure_ascii=False)}
+
+Верни JSON формата:
+{{\"post\":\"...\",\"cta\":\"Подробнее\"}}
+"""
+        data = openrouter_chat(model=model, prompt=prompt, temperature=0.5, max_tokens=520)
+        content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        obj = _extract_json_obj(content)
+        return {"post": _clamp(obj.get("post", ""), 700), "cta": _clamp(obj.get("cta", "Подробнее"), 30) or "Подробнее"}
+
+    if platform == "Telegram Ads":
+        prompt = f"""Ты — PMM/копирайтер.
+Сгенерируй РОВНО 1 вариант текста для Telegram Ads.
+Верни ТОЛЬКО JSON без пояснений.
+Лимит: message ≤ 200 символов.
+CTA из списка: Подробнее / Перейти / Открыть.
+
+Вводные (шаг 1): {json.dumps(base, ensure_ascii=False)}
+
+Верни JSON формата:
+{{\"message\":\"...\",\"cta\":\"Подробнее\"}}
+"""
+        data = openrouter_chat(model=model, prompt=prompt, temperature=0.6, max_tokens=320)
+        content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        obj = _extract_json_obj(content)
+        return {"message": _clamp(obj.get("message", ""), 200), "cta": _clamp(obj.get("cta", "Подробнее"), 30) or "Подробнее"}
+
+    prompt = f"""Ты — PMM/копирайтер.
+Сгенерируй РОВНО 1 вариант для Telegram посевов:
+1) image_text — 1 строка (≤ 40 символов) для текста на креативе
+2) post — пост (≤ 500 символов) нативно, без ощущения баннера
+Верни ТОЛЬКО JSON без пояснений.
+
+Вводные (шаг 1): {json.dumps(base, ensure_ascii=False)}
+
+Верни JSON формата:
+{{\"image_text\":\"...\",\"post\":\"...\"}}
+"""
+    data = openrouter_chat(model=model, prompt=prompt, temperature=0.7, max_tokens=720)
+    content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+    obj = _extract_json_obj(content)
+    return {"image_text": _clamp(obj.get("image_text", ""), 40), "post": _clamp(obj.get("post", ""), 500)}
+
+
+def image_model_candidates():
+    """Primary image model + fallbacks (comma-separated in Secrets)."""
+    primary = (st.secrets.get("OPENROUTER_IMAGE_MODEL", "") or "").strip() or "black-forest-labs/flux.2-flex"
+    fb_raw = (st.secrets.get("OPENROUTER_IMAGE_MODEL_FALLBACKS", "") or "").strip()
+    fallbacks = [m.strip() for m in fb_raw.split(",") if m.strip()]
+
+    # Sane defaults if user didn't set fallbacks
+    if not fallbacks:
+        fallbacks = [
+            "black-forest-labs/flux.2-flex",
+            "black-forest-labs/flux.2-pro",
+        ]
+
+    # De-duplicate
+    seen = set()
+    models = []
+    for m in [primary] + fallbacks:
+        if m and m not in seen:
+            models.append(m)
+            seen.add(m)
+    return models
+
+
+def _extract_image_url_from_openrouter_response(data: dict) -> str:
+    """Extract base64 data URL from OpenRouter response (robust to schema variants)."""
+    if not data or not data.get("choices"):
+        return ""
+
+    msg = (data["choices"][0] or {}).get("message", {}) or {}
+
+    # Preferred: message.images (per OpenRouter docs)
     images = msg.get("images") or []
-    if not images:
-        return None
-    return images[0]["image_url"]["url"]
+    if images:
+        try:
+            url = images[0]["image_url"]["url"]
+            return url or ""
+        except Exception:
+            pass
+
+    # Sometimes providers return content as list of blocks
+    content = msg.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                url = (part.get("image_url") or {}).get("url", "")
+                if url:
+                    return url
+
+    # Or a plain string with data:image...
+    if isinstance(content, str):
+        m = re.search(r"(data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+)", content)
+        if m:
+            return m.group(1)
+
+    return ""
+
+
+def generate_demo_image(prompt: str, aspect_ratio="16:9", image_size="1K"):
+    """Generate one demo image; tries primary model, then fallbacks."""
+    last_err = None
+
+    for model in image_model_candidates():
+        try:
+            kwargs = {
+                "model": model,
+                "prompt": prompt,
+                "modalities": ["image", "text"],
+                "temperature": 0.2,
+                "max_tokens": 300,
+            }
+
+            # image_config (aspect_ratio/image_size) is documented mainly for Gemini; other models may ignore or error
+            if "gemini" in model.lower():
+                kwargs["image_config"] = {"aspect_ratio": aspect_ratio, "image_size": image_size}
+
+            data = openrouter_chat(**kwargs)
+            url = _extract_image_url_from_openrouter_response(data)
+            if url:
+                return url
+
+            last_err = RuntimeError(f"No image returned by model: {model}")
+
+        except Exception as e:
+            last_err = e
+            continue
+
+    if last_err:
+        raise last_err
+    return None
 
 
 # -----------------------------
@@ -545,6 +740,51 @@ def screen_3():
     if not selected:
         st.warning("Сначала выберите площадки на шаге 2.")
         return
+
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+
+    # --- AI: generate ONE text per selected platform from Step-1 fields ---
+    st.markdown("### AI (опционально)")
+    st.caption("Сгенерируем по 1 варианту текста для выбранных площадок, используя только данные из «Основной информации».")
+
+    overwrite = st.checkbox("Перезаписать уже заполненные поля", value=False)
+
+    if st.button("⚡ Сгенерировать тексты (1 вариант)", use_container_width=True, type="primary"):
+        if not openrouter_api_key():
+            st.error("Добавьте OPENROUTER_API_KEY в Secrets, чтобы включить генерацию.")
+        elif not (st.session_state.what_advertise.strip() and st.session_state.segment_desc.strip() and st.session_state.landing_url.strip()):
+            st.error("Заполните на шаге 1 минимум: «Что рекламируем», «Описание сегмента», «Посадочная ссылка». ")
+        else:
+            with st.spinner("Генерируем тексты…"):
+                for p in selected:
+                    try:
+                        out = ai_generate_one_text(p)
+                        if p == "Яндекс":
+                            if overwrite or not st.session_state.yandex_title.strip():
+                                st.session_state.yandex_title = out.get("title", st.session_state.yandex_title)
+                            if overwrite or not st.session_state.yandex_body.strip():
+                                st.session_state.yandex_body = out.get("body", st.session_state.yandex_body)
+                        elif p == "VK":
+                            if overwrite or not st.session_state.vk_post_text.strip():
+                                st.session_state.vk_post_text = out.get("post", st.session_state.vk_post_text)
+                            if overwrite or not (st.session_state.vk_cta or "").strip():
+                                st.session_state.vk_cta = out.get("cta", st.session_state.vk_cta)
+                        elif p == "Telegram Ads":
+                            if overwrite or not st.session_state.tg_message.strip():
+                                st.session_state.tg_message = out.get("message", st.session_state.tg_message)
+                            if overwrite or not (st.session_state.tg_cta or "").strip():
+                                st.session_state.tg_cta = out.get("cta", st.session_state.tg_cta)
+                        else:
+                            if overwrite or not st.session_state.seed_image_text.strip():
+                                st.session_state.seed_image_text = out.get("image_text", st.session_state.seed_image_text)
+                            if overwrite or not st.session_state.seed_post_text.strip():
+                                st.session_state.seed_post_text = out.get("post", st.session_state.seed_post_text)
+                    except Exception as e:
+                        st.warning(f"{p}: не удалось сгенерировать ({e})")
+
+            st.success("Готово! Тексты подставлены в поля ниже.")
+            persist_save(PERSIST_KEYS)
+            st.rerun()
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
@@ -781,8 +1021,14 @@ def render_demo_images(platform: str, fmt: str):
 
     if data_url:
         st.image(data_url, use_column_width=True)
-    else:
-        st.info("Демо-визуал пока не сгенерирован (или не задан ключ OpenRouter).")
+        return
+
+    st.info("Демо-визуал пока не сгенерирован. Нажмите «🎨 Сгенерировать демо-визуалы» выше.")
+    if openrouter_api_key():
+        st.caption(
+            "Если при генерации видите «No endpoints found…», значит для выбранной модели сейчас нет доступных провайдеров. "
+            "Решение: подключить BYOK-провайдера в OpenRouter (например, Google AI Studio/Vertex) или указать другую модель в Secrets."
+        )
 
 
 # -----------------------------
@@ -817,7 +1063,19 @@ def screen_4():
         if not api_key:
             st.warning("Чтобы генерировать демо-картинки, добавьте OPENROUTER_API_KEY в Streamlit Secrets.")
         else:
-            st.caption("Сгенерируем по 1 демо-визуалу на выбранный формат (где уместно).")
+            st.caption(
+                "Сгенерируем по 1 демо-визуалу на выбранный формат (где уместно). "
+                "Модель можно менять через OPENROUTER_IMAGE_MODEL. "
+                "Если выбранный model BYOK — подключите ключ провайдера в OpenRouter, иначе увидите «No endpoints found…»."
+            )
+            st.code(
+                """OPENROUTER_IMAGE_MODEL = \"black-forest-labs/flux.2-flex\"
+# (опционально) если основная модель недоступна — пробуем фоллбеки
+OPENROUTER_IMAGE_MODEL_FALLBACKS = \"black-forest-labs/flux.2-pro\"
+""",
+                language="toml",
+            )
+
             if st.button("🎨 Сгенерировать демо-визуалы", type="primary", use_container_width=True):
                 with st.spinner("Генерируем демо-визуалы..."):
                     for p in selected:
@@ -840,8 +1098,6 @@ def screen_4():
                                     utp = st.session_state.tg_media_brief or "Ключевое сообщение"
 
                                 aspect = "16:9"
-                                if p == "Telegram Ads" and f in ["Изображение", "Видео"]:
-                                    aspect = "16:9"
                                 if p == "Telegram посевы":
                                     aspect = "4:5"
 
