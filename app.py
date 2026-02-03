@@ -1,3 +1,4 @@
+# app.py
 import json
 import re
 from copy import deepcopy
@@ -5,18 +6,18 @@ from copy import deepcopy
 import requests
 import streamlit as st
 
-# -----------------------------
+# =========================
 # Page config
-# -----------------------------
+# =========================
 st.set_page_config(
     page_title="hh Сегменты — заявка",
     page_icon="🧩",
     layout="wide",
 )
 
-# -----------------------------
+# =========================
 # Styles
-# -----------------------------
+# =========================
 st.markdown(
     """
 <style>
@@ -27,15 +28,16 @@ st.markdown(
   --soft:#f3f4f6;
   --accent:#ef4444;
 }
+.app-title{ font-size:2.2rem; font-weight:900; margin:0.2rem 0 0.2rem 0; }
+.app-sub{ color:var(--muted); margin-bottom:1.2rem; }
 .small-muted{ color:var(--muted); font-size:0.92rem; }
 .hr{ height:1px; background:var(--border); margin:18px 0; }
 .card{ background:var(--card-bg); border:1px solid var(--border); border-radius:16px; padding:16px; }
 .badge{ display:inline-block; padding:6px 10px; border:1px solid var(--border); border-radius:999px; background:#fafafa; font-size:0.85rem; color:#111827; }
-.demo-wrap{ margin-top:8px; }
-.demo-title{ font-weight:800; font-size:1.05rem; margin-bottom:8px; }
-.demo-sub{ color:var(--muted); font-size:0.92rem; margin-bottom:10px; }
+.hint{ background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; border-radius:14px; padding:12px 14px; }
+.ok{ background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; border-radius:14px; padding:12px 14px; }
 .ad{ border:1px solid var(--border); border-radius:14px; padding:14px; background:#fff; }
-.ad-head{ font-weight:800; margin-bottom:6px; }
+.ad-head{ font-weight:900; margin-bottom:6px; }
 .ad-text{ color:#111827; margin-bottom:10px; white-space:pre-wrap; }
 .ad-meta{ color:var(--muted); font-size:0.85rem; }
 .ad-btn{ display:inline-block; padding:8px 12px; border-radius:10px; background:#111827; color:#fff; font-size:0.9rem; text-decoration:none; }
@@ -44,9 +46,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# -----------------------------
+# =========================
 # Constants
-# -----------------------------
+# =========================
 PAGES = [
     "0. Старт",
     "1. Основная информация",
@@ -71,9 +73,9 @@ LIMITS = {
     "seed_img_text": 40,
 }
 
-# -----------------------------
+# =========================
 # Defaults (single source of truth)
-# -----------------------------
+# =========================
 DEFAULT_FORM = {
     # Step 1
     "what_advertise": "",
@@ -91,15 +93,13 @@ DEFAULT_FORM = {
     "pl_tgads": False,
     "pl_tgseeding": False,
 
-    # formats as MULTISELECT
     "fmt_yandex": [],
     "fmt_vk": [],
     "fmt_tgads": [],
 
-    # Step 3 AI
+    # Step 3
     "ai_overwrite": False,
 
-    # Step 3 texts/inputs
     "yandex_text_owner": "Клиент",
     "yandex_title": "",
     "yandex_body": "",
@@ -127,19 +127,18 @@ DEFAULT_FORM = {
     "seed_post_text": "",
     "seed_links": "",
 
-    # Demo images
+    # Step 4 demo
     "demo_images": {},
 }
 
-# -----------------------------
-# Session state init (prevents resets across navigation)
-# -----------------------------
 
 def _deepcopy_if_needed(v):
     return deepcopy(v) if isinstance(v, (dict, list)) else v
 
 
 def init_state():
+    # ВАЖНО: только setdefault/инициализация отсутствующих ключей,
+    # иначе любые переходы будут "сбрасывать" данные.
     for k, v in DEFAULT_FORM.items():
         if k not in st.session_state:
             st.session_state[k] = _deepcopy_if_needed(v)
@@ -150,9 +149,9 @@ def init_state():
 
 init_state()
 
-# -----------------------------
+# =========================
 # Helpers
-# -----------------------------
+# =========================
 
 def remaining(max_len: int, value: str) -> int:
     value = value or ""
@@ -219,14 +218,13 @@ def get_selected_formats(platform: str):
     if platform == "Telegram Ads":
         return st.session_state.fmt_tgads or []
     if platform == "Telegram посевы":
-        # фиксированный формат
         return ["Пост + изображение с текстом"]
     return []
 
 
-# -----------------------------
+# =========================
 # OpenRouter helpers
-# -----------------------------
+# =========================
 
 def _secret(name: str, default: str = "") -> str:
     try:
@@ -240,7 +238,7 @@ def openrouter_api_key() -> str:
 
 
 def openrouter_text_model() -> str:
-    # Пользователь может задать в Secrets. Если модель не существует/недоступна — сработают фоллбеки ниже.
+    # ВАЖНО: google/gemini-flash-1.5 часто даёт 404 в OpenRouter.
     return _secret("OPENROUTER_TEXT_MODEL", "google/gemini-2.0-flash-lite-001")
 
 
@@ -248,7 +246,6 @@ def openrouter_text_fallbacks() -> list[str]:
     raw = _secret("OPENROUTER_TEXT_MODEL_FALLBACKS", "")
     models = [m.strip() for m in raw.split(",") if m.strip()]
     if not models:
-        # «openrouter/auto» почти всегда спасает при 404 на конкретной модели
         models = [
             "google/gemini-2.0-flash-001",
             "openrouter/auto",
@@ -280,7 +277,7 @@ def openrouter_provider_prefs() -> dict:
     return prefs
 
 
-def openrouter_chat(model: str, messages: list, temperature=0.6, max_tokens=1200, modalities=None, image_config=None):
+def openrouter_chat(model: str, messages: list, temperature=0.6, max_tokens=900, modalities=None, image_config=None):
     api_key = openrouter_api_key()
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY не задан в Secrets")
@@ -312,7 +309,6 @@ def openrouter_chat(model: str, messages: list, temperature=0.6, max_tokens=1200
     )
 
     if r.status_code != 200:
-        # OpenRouter часто возвращает полезный JSON в теле
         try:
             detail = r.json()
         except Exception:
@@ -323,7 +319,6 @@ def openrouter_chat(model: str, messages: list, temperature=0.6, max_tokens=1200
 
 
 def openrouter_chat_with_fallback(models: list[str], **kwargs):
-    """Try models in order; return (model_used, response_json)."""
     errors = []
     for m in models:
         try:
@@ -380,19 +375,14 @@ def ai_generate_one_text(platform: str) -> dict:
     models = [openrouter_text_model()] + openrouter_text_fallbacks()
 
     if platform == "Яндекс":
-        prompt = f"""
-Ты — PMM/копирайтер.
-Сгенерируй РОВНО 1 вариант текста для Яндекс объявлений.
-Верни ТОЛЬКО JSON (без markdown/пояснений).
-Лимиты: title ≤ {LIMITS['yandex_title']} символов, body ≤ {LIMITS['yandex_body']} символов.
-Стиль: нейтрально-деловой, без клише, без обещаний «гарантируем».
-
-Вводные: {json.dumps(base, ensure_ascii=False)}
-
-Верни JSON:
-{{"title":"...","body":"..."}}
-""".strip()
-
+        prompt = (
+            "Ты — PMM/копирайтер. Сгенерируй РОВНО 1 вариант текста для Яндекс объявлений. "
+            "Верни ТОЛЬКО JSON (без markdown/пояснений). "
+            f"Лимиты: title ≤ {LIMITS['yandex_title']} символов, body ≤ {LIMITS['yandex_body']} символов. "
+            "Стиль: нейтрально-деловой, без клише, без обещаний «гарантируем».\n\n"
+            f"Вводные: {json.dumps(base, ensure_ascii=False)}\n\n"
+            "Верни JSON: {\"title\":\"...\",\"body\":\"...\"}"
+        )
         _, data = openrouter_chat_with_fallback(
             models=models,
             messages=[{"role": "user", "content": prompt}],
@@ -407,19 +397,14 @@ def ai_generate_one_text(platform: str) -> dict:
         }
 
     if platform == "VK":
-        prompt = f"""
-Ты — PMM/копирайтер.
-Сгенерируй РОВНО 1 вариант нативного поста для VK.
-Верни ТОЛЬКО JSON.
-Лимит: post ≤ {LIMITS['vk_post']} символов.
-CTA из списка: Перейти / Подробнее / Открыть / Откликнуться.
-
-Вводные: {json.dumps(base, ensure_ascii=False)}
-
-Верни JSON:
-{{"post":"...","cta":"Подробнее"}}
-""".strip()
-
+        prompt = (
+            "Ты — PMM/копирайтер. Сгенерируй РОВНО 1 вариант нативного поста для VK. "
+            "Верни ТОЛЬКО JSON. "
+            f"Лимит: post ≤ {LIMITS['vk_post']} символов. "
+            "CTA из списка: Перейти / Подробнее / Открыть / Откликнуться.\n\n"
+            f"Вводные: {json.dumps(base, ensure_ascii=False)}\n\n"
+            "Верни JSON: {\"post\":\"...\",\"cta\":\"Подробнее\"}"
+        )
         _, data = openrouter_chat_with_fallback(
             models=models,
             messages=[{"role": "user", "content": prompt}],
@@ -434,19 +419,14 @@ CTA из списка: Перейти / Подробнее / Открыть / О
         }
 
     if platform == "Telegram Ads":
-        prompt = f"""
-Ты — PMM/копирайтер.
-Сгенерируй РОВНО 1 вариант текста для Telegram Ads.
-Верни ТОЛЬКО JSON.
-Лимит: message ≤ {LIMITS['tgads_text']} символов.
-CTA из списка: Подробнее / Перейти / Открыть.
-
-Вводные: {json.dumps(base, ensure_ascii=False)}
-
-Верни JSON:
-{{"message":"...","cta":"Подробнее"}}
-""".strip()
-
+        prompt = (
+            "Ты — PMM/копирайтер. Сгенерируй РОВНО 1 вариант текста для Telegram Ads. "
+            "Верни ТОЛЬКО JSON. "
+            f"Лимит: message ≤ {LIMITS['tgads_text']} символов. "
+            "CTA из списка: Подробнее / Перейти / Открыть.\n\n"
+            f"Вводные: {json.dumps(base, ensure_ascii=False)}\n\n"
+            "Верни JSON: {\"message\":\"...\",\"cta\":\"Подробнее\"}"
+        )
         _, data = openrouter_chat_with_fallback(
             models=models,
             messages=[{"role": "user", "content": prompt}],
@@ -461,19 +441,14 @@ CTA из списка: Подробнее / Перейти / Открыть.
         }
 
     # Telegram посевы
-    prompt = f"""
-Ты — PMM/копирайтер.
-Сгенерируй РОВНО 1 вариант для Telegram посевов:
-1) image_text — 1 строка (≤ {LIMITS['seed_img_text']} символов) для текста на креативе
-2) post — пост (≤ {LIMITS['seed_post']} символов) нативно, без ощущения баннера
-Верни ТОЛЬКО JSON.
-
-Вводные: {json.dumps(base, ensure_ascii=False)}
-
-Верни JSON:
-{{"image_text":"...","post":"..."}}
-""".strip()
-
+    prompt = (
+        "Ты — PMM/копирайтер. Сгенерируй РОВНО 1 вариант для Telegram посевов: "
+        f"1) image_text — 1 строка (≤ {LIMITS['seed_img_text']} символов) для текста на креативе; "
+        f"2) post — пост (≤ {LIMITS['seed_post']} символов) нативно, без ощущения баннера. "
+        "Верни ТОЛЬКО JSON.\n\n"
+        f"Вводные: {json.dumps(base, ensure_ascii=False)}\n\n"
+        "Верни JSON: {\"image_text\":\"...\",\"post\":\"...\"}"
+    )
     _, data = openrouter_chat_with_fallback(
         models=models,
         messages=[{"role": "user", "content": prompt}],
@@ -491,27 +466,27 @@ CTA из списка: Подробнее / Перейти / Открыть.
 def extract_image_url(data: dict) -> str:
     if not data or not data.get("choices"):
         return ""
-
     msg = (data["choices"][0] or {}).get("message", {}) or {}
 
-    # Часто OpenRouter возвращает images: [{image_url:{url:...}}]
+    # Часто OpenRouter возвращает message.images
     images = msg.get("images") or []
     if images:
         img0 = images[0] or {}
         url_obj = img0.get("image_url") or img0.get("imageUrl") or {}
-        url = url_obj.get("url")
+        url = (url_obj or {}).get("url")
         if url:
             return url
 
-    # Иногда content — список блоков
     content = msg.get("content")
+
+    # Иногда content — список блоков
     if isinstance(content, list):
         for part in content:
             if not isinstance(part, dict):
                 continue
             if part.get("type") == "image_url":
                 url_obj = part.get("image_url") or part.get("imageUrl") or {}
-                url = (url_obj or {}).get("url", "")
+                url = (url_obj or {}).get("url")
                 if url:
                     return url
 
@@ -525,28 +500,26 @@ def extract_image_url(data: dict) -> str:
 
 
 def generate_demo_image(prompt: str, aspect_ratio: str = "16:9") -> str:
-    """Generate an image via OpenRouter.
+    """Generate image via OpenRouter.
 
-    Важно: многие image-модели НЕ поддерживают одновременный output modalities ['image','text'].
-    Поэтому запрашиваем только ['image'] — это устраняет ошибку вида:
+    Важно: image-модели часто НЕ поддерживают одновременно output modalities ['image','text'].
+    Поэтому запрашиваем только ['image'] — это убирает ошибку
     "No endpoints found that support the requested output modalities: image, text".
     """
 
     models = [openrouter_image_model()] + openrouter_image_fallbacks()
-    last_err = None
 
+    last_err = None
     for model in models:
         try:
+            # Для Flux добавляем аспект в промпт (они часто игнорируют image_config).
             is_gemini = model.startswith("google/")
-            image_cfg = None
             user_prompt = prompt
-
+            image_cfg = None
             if is_gemini:
-                # Gemini поддерживает image_config
                 image_cfg = {"aspect_ratio": aspect_ratio, "image_size": "1K"}
             else:
-                # Flux и др.: подсказываем аспект в промпте
-                user_prompt = f"{prompt}\\n\\nAspect ratio: {aspect_ratio}."
+                user_prompt = f"{prompt}\n\nAspect ratio: {aspect_ratio}."
 
             _, data = openrouter_chat_with_fallback(
                 models=[model],
@@ -564,19 +537,18 @@ def generate_demo_image(prompt: str, aspect_ratio: str = "16:9") -> str:
             last_err = RuntimeError("Пустой ответ (не нашли image_url)")
         except Exception as e:
             last_err = e
-            continue
 
     raise RuntimeError(last_err or "Не удалось сгенерировать изображение")
 
 
-# -----------------------------
+# =========================
 # Sidebar (navigation + reset)
-# -----------------------------
+# =========================
 st.sidebar.markdown("## 🧩 hh Сегменты — заявка")
 st.sidebar.markdown('<div class="small-muted">Форма → заявка → демо превью</div>', unsafe_allow_html=True)
 st.sidebar.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-current_page = st.sidebar.radio("Навигация", PAGES, key="nav_page")
+st.sidebar.radio("Навигация", PAGES, key="nav_page")
 
 
 def reset_form():
@@ -588,23 +560,22 @@ def reset_form():
 
 st.sidebar.button("↩️ Сбросить форму", on_click=reset_form, use_container_width=True)
 
+# Header (main)
+st.markdown('<div class="app-title">hh Сегменты — заявка</div>', unsafe_allow_html=True)
+st.markdown('<div class="app-sub">Заполнение брифа займёт до 5 минут.</div>', unsafe_allow_html=True)
 
-# -----------------------------
+
+# =========================
 # Screens
-# -----------------------------
+# =========================
 
 def screen_0():
-    st.title("Заполнение заявки на изготовление материалов для hh Сегментов")
-    st.markdown("Заполнение брифа займёт **до 5 минут**.")
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-
     st.markdown(
         """
 <div class="card">
-  <div class="demo-title">Что вы получите на выходе</div>
-  <div class="demo-sub">
-    Заполненный бриф по выбранным площадкам и форматам + примерный мокап (как может выглядеть реклама),
-    чтобы быстро согласовать направление.
+  <div style="font-weight:900; font-size:1.15rem; margin-bottom:6px;">Что это</div>
+  <div class="small-muted">
+    Собираем минимально достаточный бриф для запуска hh Сегментов. На последнем шаге покажем мокапы объявлений.
   </div>
 </div>
 """,
@@ -619,15 +590,14 @@ def screen_0():
     st.button("Начать →", on_click=go_next, type="primary", use_container_width=True)
 
 
-
 def screen_1():
     st.title("Основная информация")
 
-    with st.expander("Справочная информация по hh сегментам (кратко)", expanded=False):
+    with st.expander("Коротко про hh Сегменты", expanded=False):
         st.markdown(
             """
 - Важнее всего: **что рекламируем**, **цель**, **гео**, **описание сегмента**, **посадочная**.
-- Контекст посадочной можно **вставить вручную** или попробовать **подтянуть по ссылке**.
+- Контекст посадочной можно вставить вручную или попробовать подтянуть по ссылке.
 """
         )
 
@@ -662,7 +632,6 @@ def screen_1():
             key="segment_desc",
             height=120,
             placeholder="1–3 сегмента: кто эти люди, опыт/профили/уровень.",
-            help="Это аудитория, на которую будет показываться реклама.",
         )
         st.text_area(
             "Файлы/материалы (ссылки)",
@@ -679,7 +648,8 @@ def screen_1():
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
     st.subheader("Контекст посадочной (для генерации текстов)")
-    st.caption("Если есть — вставь текст с посадочной. Либо попробуй подтянуть по ссылке кнопкой ниже.")
+    st.caption("Если есть — вставьте текст с посадочной. Либо попробуйте подтянуть по ссылке кнопкой ниже.")
+
     st.text_area(
         "Контекст посадочной",
         key="landing_context",
@@ -702,7 +672,6 @@ def screen_1():
         st.button("Далее →", on_click=go_next, type="primary", use_container_width=True)
 
 
-
 def screen_2():
     st.title("Креативы и площадки")
     st.caption("Выберите рекламные площадки и форматы креативов.")
@@ -721,11 +690,11 @@ def screen_2():
     with col2:
         st.subheader("Форматы (по площадкам)")
         if st.session_state.pl_yandex:
-            st.multiselect("Яндекс", FORMATS["Яндекс"], key="fmt_yandex")
+            st.multiselect("Яндекс", FORMATS["Яндекс"], key="fmt_yandex", placeholder="Выберите формат(ы)")
         if st.session_state.pl_vk:
-            st.multiselect("VK", FORMATS["VK"], key="fmt_vk")
+            st.multiselect("VK", FORMATS["VK"], key="fmt_vk", placeholder="Выберите формат(ы)")
         if st.session_state.pl_tgads:
-            st.multiselect("Telegram Ads", FORMATS["Telegram Ads"], key="fmt_tgads")
+            st.multiselect("Telegram Ads", FORMATS["Telegram Ads"], key="fmt_tgads", placeholder="Выберите формат(ы)")
         if st.session_state.pl_tgseeding:
             st.info("Telegram посевы: формат фиксированный — пост + изображение с текстом")
 
@@ -745,14 +714,13 @@ def screen_2():
         st.button("Далее →", on_click=go_next, type="primary", use_container_width=True)
 
 
-
 def screen_3():
     st.title("Тексты и креативы")
     st.caption("Заполните тексты и креативы по выбранным площадкам и форматам. Данные сохраняются автоматически.")
 
     selected = get_selected_platforms()
     if not selected:
-        st.warning("Сначала выберите площадки на шаге 2.")
+        st.markdown('<div class="hint">Сначала выберите площадки на шаге 2.</div>', unsafe_allow_html=True)
         return
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
@@ -769,7 +737,7 @@ def screen_3():
             and st.session_state.segment_desc.strip()
             and st.session_state.landing_url.strip()
         ):
-            st.error("Заполните на шаге 1 минимум: «Что рекламируем», «Описание сегмента», «Посадочная ссылка».")
+            st.error("Заполните на шаге 1 минимум: «Что рекламируем», «Описание сегмента», «Посадочная ссылка». ")
         else:
             logs = []
             updated_any = False
@@ -816,12 +784,12 @@ def screen_3():
                         logs.append(f"{p}: {e}")
 
             if updated_any:
-                st.success("Готово! Тексты подставлены в поля ниже.")
+                st.markdown('<div class="ok">Готово! Тексты подставлены в поля ниже.</div>', unsafe_allow_html=True)
             else:
-                st.error("Генерация не выполнена — проверьте сообщение ниже.")
+                st.markdown('<div class="hint">Генерация не выполнена — проверьте сообщение ниже.</div>', unsafe_allow_html=True)
 
             if logs:
-                st.code("\\n".join(logs))
+                st.code("\n".join(logs))
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
@@ -836,7 +804,7 @@ def screen_3():
                 "Быстрые ссылки (опц.) — по одной на строку: Название | URL",
                 key="yandex_quicklinks",
                 height=90,
-                placeholder="Карьерный сайт | https://...\\nВакансии | https://...",
+                placeholder="Карьерный сайт | https://...\nВакансии | https://...",
             )
 
             st.markdown("### Креативы")
@@ -889,7 +857,7 @@ def screen_3():
 
     if "Telegram посевы" in selected:
         with st.expander("Telegram посевы", expanded=False):
-            st.markdown("Важно: в посевах картинка обычно с текстом на ней — укажи ключевое сообщение.")
+            st.markdown("Важно: в посевах картинка обычно с текстом на ней — укажите ключевое сообщение.")
             st.radio("Кто готовит материалы?", ["Клиент", "Команда hh"], key="seed_owner", horizontal=True)
             limited_text_input("Текст на изображении (1 строка, до 40)", "seed_image_text", LIMITS["seed_img_text"], placeholder="Короткое УТП")
             limited_text_area("Текст поста (до 500)", "seed_post_text", LIMITS["seed_post"], height=150, placeholder="УТП → пояснение → ссылка")
@@ -910,9 +878,9 @@ def screen_3():
         st.button("Далее →", on_click=go_next, type="primary", use_container_width=True)
 
 
-# -----------------------------
+# =========================
 # Demo cards
-# -----------------------------
+# =========================
 
 def demo_card_yandex(fmt: str):
     title = st.session_state.yandex_title.strip() or "Заголовок"
@@ -920,12 +888,10 @@ def demo_card_yandex(fmt: str):
     st.markdown(f"<div class='badge'>Яндекс · {fmt}</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
-<div class="demo-wrap">
-  <div class="ad">
-    <div class="ad-head">{title}</div>
-    <div class="ad-text">{body}</div>
-    <div class="ad-meta">Ссылка: {st.session_state.landing_url or "https://..."}</div>
-  </div>
+<div class="ad">
+  <div class="ad-head">{title}</div>
+  <div class="ad-text">{body}</div>
+  <div class="ad-meta">Ссылка: {st.session_state.landing_url or "https://..."}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -938,12 +904,10 @@ def demo_card_vk(fmt: str):
     st.markdown(f"<div class='badge'>VK · {fmt}</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
-<div class="demo-wrap">
-  <div class="ad">
-    <div class="ad-text">{post}</div>
-    <a class="ad-btn" href="#" onclick="return false;">{cta}</a>
-    <div class="ad-meta" style="margin-top:10px;">Ссылка: {st.session_state.landing_url or "https://..."}</div>
-  </div>
+<div class="ad">
+  <div class="ad-text">{post}</div>
+  <a class="ad-btn" href="#" onclick="return false;">{cta}</a>
+  <div class="ad-meta" style="margin-top:10px;">Ссылка: {st.session_state.landing_url or "https://..."}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -956,11 +920,9 @@ def demo_card_tg_text():
     st.markdown("<div class='badge'>Telegram Ads · Текст</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
-<div class="demo-wrap">
-  <div class="ad">
-    <div class="ad-text">{msg}</div>
-    <div class="ad-meta">CTA: {cta}</div>
-  </div>
+<div class="ad">
+  <div class="ad-text">{msg}</div>
+  <div class="ad-meta">CTA: {cta}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -968,15 +930,13 @@ def demo_card_tg_text():
 
 
 def demo_card_tg_media(fmt: str):
-    caption = st.session_state.tg_message.strip() or "Подпись или сопроводительный текст"
+    caption = st.session_state.tg_message.strip() or "Подпись / сопроводительный текст"
     st.markdown(f"<div class='badge'>Telegram Ads · {fmt}</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
-<div class="demo-wrap">
-  <div class="ad">
-    <div class="ad-text">{caption}</div>
-    <div class="ad-meta">Ссылка: {st.session_state.landing_url or "https://..."}</div>
-  </div>
+<div class="ad">
+  <div class="ad-text">{caption}</div>
+  <div class="ad-meta">Ссылка: {st.session_state.landing_url or "https://..."}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -989,12 +949,10 @@ def demo_card_seeding():
     st.markdown("<div class='badge'>Telegram посевы · Пост + изображение</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
-<div class="demo-wrap">
-  <div class="ad">
-    <div class="ad-head">{img_text}</div>
-    <div class="ad-text">{post}</div>
-    <div class="ad-meta">Ссылка: {st.session_state.landing_url or "https://..."}</div>
-  </div>
+<div class="ad">
+  <div class="ad-head">{img_text}</div>
+  <div class="ad-text">{post}</div>
+  <div class="ad-meta">Ссылка: {st.session_state.landing_url or "https://..."}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -1010,23 +968,20 @@ def render_demo_image(platform: str, fmt: str):
         st.info("Демо-визуал пока не сгенерирован. Нажмите «🎨 Сгенерировать демо-визуалы» выше.")
 
 
-
 def screen_4():
     st.title("Примерный вид рекламных объявлений")
     st.caption("Быстрый мокап, чтобы согласовать направление.")
 
     selected = get_selected_platforms()
     if not selected:
-        st.warning("Сначала выберите площадки на шаге 2.")
+        st.markdown('<div class="hint">Сначала выберите площадки на шаге 2.</div>', unsafe_allow_html=True)
         return
 
     st.markdown(
         """
 <div class="card">
-  <div class="demo-title">Демо-пример</div>
-  <div class="demo-sub">
-    Финальный вид зависит от модерации и конкретного формата. Здесь — быстрый мокап.
-  </div>
+  <div style="font-weight:900; font-size:1.05rem; margin-bottom:6px;">Демо-пример</div>
+  <div class="small-muted">Финальный вид зависит от модерации и конкретного формата. Здесь — быстрый мокап.</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -1085,7 +1040,7 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, openrouter
                                 f"Topic: {core}. Audience: {seg}. Geo: {geo}. "
                                 f"Main readable headline text: '{utp}'. "
                                 "Style: minimal, corporate, high contrast, large readable typography. "
-                                "No offensive content."
+                                "No tiny text."
                             )
 
                             try:
@@ -1099,7 +1054,7 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, openrouter
 
                 if errors:
                     st.warning("Часть визуалов не удалось сгенерировать — подробности ниже.")
-                    st.code("\\n".join(errors))
+                    st.code("\n".join(errors))
                 else:
                     st.success("Готово! Пролистайте ниже — демо-визуалы появятся в карточках.")
 
@@ -1117,7 +1072,7 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, openrouter
 
             for fmt in fmts:
                 st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-                left, right = st.columns([1.1, 1])
+                left, right = st.columns([1.05, 1])
 
                 with left:
                     st.markdown("#### Тексты")
@@ -1128,5 +1083,4 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, openrouter
                     elif platform == "Telegram Ads":
                         if fmt == "Текст":
                             demo_card_tg_text()
-                        else:
-                            demo_card_
+      
