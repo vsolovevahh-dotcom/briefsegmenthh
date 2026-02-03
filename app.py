@@ -142,8 +142,8 @@ def _deepcopy_if_needed(v: Any) -> Any:
 
 
 def init_state():
-    """Initialize missing keys only.
-
+    """
+    Initialize missing keys only.
     ВАЖНО: не перезаписываем существующие ключи на каждом rerun,
     иначе при переходах/любом клике будет происходить "сброс".
     """
@@ -157,7 +157,6 @@ init_state()
 # =========================
 # Helpers
 # =========================
-
 def remaining(max_len: int, value: str) -> int:
     value = value or ""
     return max(max_len - len(value), 0)
@@ -230,7 +229,6 @@ def get_selected_formats(platform: str):
 # =========================
 # OpenRouter helpers
 # =========================
-
 def _secret(name: str, default: str = "") -> str:
     try:
         return (st.secrets.get(name, default) or "").strip()
@@ -243,8 +241,8 @@ def openrouter_api_key() -> str:
 
 
 def openrouter_text_model() -> str:
-    # Если в Secrets не задано — берём дефолт.
-    # Важно: старые/неверные IDs (например, google/gemini-flash-1.5) часто дают 404.
+    # Если в Secrets не задано — берём дефолт openrouter/auto.
+    # Важно: неверные IDs дают 404 — ниже есть фоллбеки.
     return _secret("OPENROUTER_TEXT_MODEL", "openrouter/auto")
 
 
@@ -253,10 +251,9 @@ def openrouter_text_fallbacks() -> list[str]:
     models = [m.strip() for m in raw.split(",") if m.strip()]
     if not models:
         models = [
-            # максимально совместимые фоллбеки
-            "openrouter/auto",
             "meta-llama/llama-3.1-8b-instruct",
             "mistralai/mistral-7b-instruct",
+            "openrouter/auto",
         ]
     return models
 
@@ -271,7 +268,7 @@ def openrouter_image_fallbacks() -> list[str]:
     if not models:
         models = [
             "black-forest-labs/flux.1-schnell",
-            "openrouter/auto",
+            "black-forest-labs/flux.1-dev",
         ]
     return models
 
@@ -359,7 +356,7 @@ def extract_json_obj(text: str) -> dict:
     first = text.find("{")
     last = text.rfind("}")
     if first != -1 and last != -1 and last > first:
-        candidate = text[first : last + 1]
+        candidate = text[first:last + 1]
         try:
             obj = json.loads(candidate)
             if isinstance(obj, dict):
@@ -379,7 +376,6 @@ def clamp(s: str, limit: int) -> str:
 
 def ai_generate_one_text(platform: str) -> dict:
     """Generate ONE text variant using only Step 1 fields."""
-
     base = {
         "what_advertise": st.session_state.get("what_advertise", ""),
         "campaign_goal": st.session_state.get("campaign_goal", ""),
@@ -397,8 +393,7 @@ def ai_generate_one_text(platform: str) -> dict:
             "Ты — PMM/копирайтер. Сгенерируй РОВНО 1 вариант текста для Яндекс объявлений. "
             "Верни ТОЛЬКО JSON (без markdown/пояснений). "
             f"Лимиты: title ≤ {LIMITS['yandex_title']} символов, body ≤ {LIMITS['yandex_body']} символов. "
-            "Стиль: нейтрально-деловой, без клише и без обещаний "
-            "типа 'гарантируем'.\n\n"
+            "Стиль: нейтрально-деловой, без клише и без обещаний типа 'гарантируем'.\n\n"
             f"Вводные: {json.dumps(base, ensure_ascii=False)}\n\n"
             "Верни JSON: {\"title\":\"...\",\"body\":\"...\"}"
         )
@@ -487,6 +482,7 @@ def extract_image_url(data: dict) -> str:
         return ""
     msg = (data["choices"][0] or {}).get("message", {}) or {}
 
+    # Some providers return `images`
     images = msg.get("images") or []
     if images:
         img0 = images[0] or {}
@@ -497,6 +493,7 @@ def extract_image_url(data: dict) -> str:
 
     content = msg.get("content")
 
+    # Multimodal `content` list
     if isinstance(content, list):
         for part in content:
             if not isinstance(part, dict):
@@ -506,7 +503,10 @@ def extract_image_url(data: dict) -> str:
                 url = (url_obj or {}).get("url")
                 if url:
                     return url
+            if part.get("type") == "image" and part.get("data"):
+                return f"data:image/png;base64,{part.get('data')}"
 
+    # Or a string containing data URL
     if isinstance(content, str):
         m = re.search(r"(data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+)", content)
         if m:
@@ -516,25 +516,26 @@ def extract_image_url(data: dict) -> str:
 
 
 def generate_demo_image(prompt: str, aspect_ratio: str = "16:9") -> str:
-    """Generate image via OpenRouter.
+    """
+    Generate image via OpenRouter.
 
     Важно: image-модели часто НЕ поддерживают одновременно output modalities ['image','text'].
     Поэтому запрашиваем только ['image'] — это убирает ошибку
     "No endpoints found that support the requested output modalities: image, text".
     """
-
     models = [openrouter_image_model()] + openrouter_image_fallbacks()
 
     last_err: Exception | None = None
     for model in models:
         try:
-            # Flux часто игнорирует image_config — добавим аспект в промпт.
             is_gemini = model.startswith("google/")
             user_prompt = prompt
             image_cfg = None
+
             if is_gemini:
                 image_cfg = {"aspect_ratio": aspect_ratio, "image_size": "1K"}
             else:
+                # Flux sometimes ignores image_config — bake aspect into prompt
                 user_prompt = f"{prompt}\n\nAspect ratio: {aspect_ratio}."
 
             _, data = openrouter_chat_with_fallback(
@@ -580,11 +581,9 @@ st.sidebar.button("↩️ Сбросить форму", on_click=reset_form, use
 st.markdown('<div class="app-title">hh Сегменты — заявка</div>', unsafe_allow_html=True)
 st.markdown('<div class="app-sub">Заполнение брифа займёт до 5 минут.</div>', unsafe_allow_html=True)
 
-
 # =========================
 # Screens
 # =========================
-
 def screen_0():
     st.markdown(
         """
@@ -676,12 +675,14 @@ def screen_1():
 
     c1, c2 = st.columns([1, 1])
     with c1:
+
         def pull_context():
             st.session_state.landing_context = try_fetch_landing_text(st.session_state.landing_url)
 
         st.button("Подтянуть контекст по ссылке (beta)", on_click=pull_context, use_container_width=True)
 
     with c2:
+
         def go_next():
             st.session_state.nav_page = "2. Креативы и площадки"
 
@@ -718,12 +719,14 @@ def screen_2():
 
     c1, c2 = st.columns([1, 1])
     with c1:
+
         def back():
             st.session_state.nav_page = "1. Основная информация"
 
         st.button("← Назад", on_click=back, use_container_width=True)
 
     with c2:
+
         def go_next():
             st.session_state.nav_page = "3. Тексты и креативы"
 
@@ -882,12 +885,14 @@ def screen_3():
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1])
     with c1:
+
         def back():
             st.session_state.nav_page = "2. Креативы и площадки"
 
         st.button("← Назад", on_click=back, use_container_width=True)
 
     with c2:
+
         def go_next():
             st.session_state.nav_page = "4. Примерный вид объявлений"
 
@@ -897,7 +902,6 @@ def screen_3():
 # =========================
 # Demo cards
 # =========================
-
 def demo_card_yandex(fmt: str):
     title = (st.session_state.yandex_title or "").strip() or "Заголовок"
     body = (st.session_state.yandex_body or "").strip() or "Текст объявления"
@@ -1014,12 +1018,6 @@ def screen_4():
                 "Сгенерируем по 1 демо-визуалу на выбранный формат (где уместно). "
                 "Основная модель — OPENROUTER_IMAGE_MODEL, фоллбеки — OPENROUTER_IMAGE_MODEL_FALLBACKS."
             )
-            st.code(
-                """OPENROUTER_IMAGE_MODEL = "black-forest-labs/flux.2-flex"
-OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, openrouter/auto"
-""",
-                language="toml",
-            )
 
             if st.button("🎨 Сгенерировать демо-визуалы", type="primary", use_container_width=True):
                 errors = []
@@ -1046,7 +1044,11 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, openrouter
                                 utp = st.session_state.yandex_title or "Ключевое сообщение"
                                 aspect = "16:9"
                             elif p == "VK":
-                                utp = (st.session_state.vk_post_text[:60] if st.session_state.vk_post_text else "Ключевое сообщение")
+                                utp = (
+                                    st.session_state.vk_post_text[:60]
+                                    if st.session_state.vk_post_text
+                                    else "Ключевое сообщение"
+                                )
                                 aspect = "16:9"
                             else:
                                 utp = st.session_state.tg_media_brief or st.session_state.tg_message or "Ключевое сообщение"
@@ -1086,5 +1088,67 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, openrouter
             if not fmts:
                 st.info("Форматы не выбраны на шаге 2.")
                 continue
+
+            tg_text_rendered = False
+
             for fmt in fmts:
-         
+                st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
+
+                if platform == "Яндекс":
+                    demo_card_yandex(fmt)
+                    if fmt in ["Изображение", "Видео"]:
+                        render_demo_image("Яндекс", fmt)
+
+                elif platform == "VK":
+                    demo_card_vk(fmt)
+                    if fmt in ["Изображение", "Видео"]:
+                        render_demo_image("VK", fmt)
+
+                elif platform == "Telegram Ads":
+                    if fmt == "Текст":
+                        if not tg_text_rendered:
+                            demo_card_tg_text()
+                            tg_text_rendered = True
+                    else:
+                        demo_card_tg_media(fmt)
+                        if fmt in ["Изображение", "Видео"]:
+                            render_demo_image("Telegram Ads", fmt)
+
+                else:  # Telegram посевы
+                    demo_card_seeding()
+                    render_demo_image("Telegram посевы", fmt)
+
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1])
+    with c1:
+
+        def back():
+            st.session_state.nav_page = "3. Тексты и креативы"
+
+        st.button("← Назад", on_click=back, use_container_width=True)
+
+    with c2:
+
+        def go_start():
+            st.session_state.nav_page = "0. Старт"
+
+        st.button("Готово · на старт →", on_click=go_start, type="primary", use_container_width=True)
+
+
+# =========================
+# Router
+# =========================
+page = st.session_state.get("nav_page", PAGES[0])
+
+if page == "0. Старт":
+    screen_0()
+elif page == "1. Основная информация":
+    screen_1()
+elif page == "2. Креативы и площадки":
+    screen_2()
+elif page == "3. Тексты и креативы":
+    screen_3()
+elif page == "4. Примерный вид объявлений":
+    screen_4()
+else:
+    screen_0()
