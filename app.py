@@ -1086,6 +1086,5 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, openrouter
             if not fmts:
                 st.info("Форматы не выбраны на шаге 2.")
                 continue
-
             for fmt in fmts:
-        
+         
