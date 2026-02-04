@@ -160,12 +160,16 @@ def remaining(max_len: int, value: str) -> int:
     return max(max_len - len(value), 0)
 
 def limited_text_input(label: str, key: str, max_chars: int, placeholder: str = ""):
-    val = st.text_input(label, key=key, max_chars=max_chars, placeholder=placeholder)
+    current_val = st.session_state.get(key, "")
+    val = st.text_input(label, value=current_val, max_chars=max_chars, placeholder=placeholder, key=f"_input_{key}")
+    st.session_state[key] = val
     st.caption(f"Осталось {remaining(max_chars, val)} символов из {max_chars}")
     return val
 
 def limited_text_area(label: str, key: str, max_chars: int, height: int = 110, placeholder: str = ""):
-    val = st.text_area(label, key=key, max_chars=max_chars, height=height, placeholder=placeholder)
+    current_val = st.session_state.get(key, "")
+    val = st.text_area(label, value=current_val, max_chars=max_chars, height=height, placeholder=placeholder, key=f"_input_{key}")
+    st.session_state[key] = val
     st.caption(f"Осталось {remaining(max_chars, val)} символов из {max_chars}")
     return val
 
@@ -196,23 +200,23 @@ def try_fetch_landing_text(url: str) -> str:
 
 def get_selected_platforms() -> list:
     res = []
-    if st.session_state.pl_yandex:
+    if st.session_state.get("pl_yandex", False):
         res.append("Яндекс")
-    if st.session_state.pl_vk:
+    if st.session_state.get("pl_vk", False):
         res.append("VK")
-    if st.session_state.pl_tgads:
+    if st.session_state.get("pl_tgads", False):
         res.append("Telegram Ads")
-    if st.session_state.pl_tgseeding:
+    if st.session_state.get("pl_tgseeding", False):
         res.append("Telegram посевы")
     return res
 
 def get_selected_formats(platform: str) -> list:
     if platform == "Яндекс":
-        return st.session_state.fmt_yandex or []
+        return st.session_state.get("fmt_yandex", [])
     if platform == "VK":
-        return st.session_state.fmt_vk or []
+        return st.session_state.get("fmt_vk", [])
     if platform == "Telegram Ads":
-        return st.session_state.fmt_tgads or []
+        return st.session_state.get("fmt_tgads", [])
     if platform == "Telegram посевы":
         return ["Пост + изображение с текстом"]
     return []
@@ -520,13 +524,15 @@ st.sidebar.markdown("## 🧩 hh Сегменты — заявка")
 st.sidebar.markdown('<div class="small-muted">Форма → заявка → демо превью</div>', unsafe_allow_html=True)
 st.sidebar.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-st.sidebar.radio("Навигация", PAGES, key="nav_page")
+current_page = st.sidebar.radio("Навигация", PAGES, index=PAGES.index(st.session_state.get("nav_page", PAGES[0])))
+st.session_state.nav_page = current_page
 
 def reset_form():
     nav = st.session_state.get("nav_page", PAGES[0])
     for k, v in DEFAULT_FORM.items():
         st.session_state[k] = _deepcopy_if_needed(v)
     st.session_state["nav_page"] = nav
+    st.rerun()
 
 st.sidebar.button("↩️ Сбросить форму", on_click=reset_form, use_container_width=True)
 
@@ -554,6 +560,7 @@ def screen_0():
 
     def go_next():
         st.session_state.nav_page = "1. Основная информация"
+        st.rerun()
 
     st.button("Начать →", on_click=go_next, type="primary", use_container_width=True)
 
@@ -571,65 +578,88 @@ def screen_1():
     col1, col2 = st.columns(2)
 
     with col1:
-        st.text_area(
+        what_advertise = st.text_area(
             "Что рекламируем*",
-            key="what_advertise",
+            value=st.session_state.get("what_advertise", ""),
             height=90,
             placeholder="Коротко: работодатель/вакансии/кампания, в 1–2 предложениях.",
+            key="_what_advertise"
         )
-        st.text_input(
+        st.session_state.what_advertise = what_advertise
+        
+        campaign_goal = st.text_input(
             "Цель кампании*",
-            key="campaign_goal",
+            value=st.session_state.get("campaign_goal", ""),
             placeholder="Напр.: трафик на вакансии / рост откликов / узнаваемость",
+            key="_campaign_goal"
         )
-        st.text_input(
+        st.session_state.campaign_goal = campaign_goal
+        
+        landing_url = st.text_input(
             "Посадочная ссылка*",
-            key="landing_url",
+            value=st.session_state.get("landing_url", ""),
             placeholder="https://…",
+            key="_landing_url"
         )
-        st.text_input(
+        st.session_state.landing_url = landing_url
+        
+        geo = st.text_input(
             "Гео*",
-            key="geo",
+            value=st.session_state.get("geo", ""),
             placeholder="Города/регионы",
+            key="_geo"
         )
+        st.session_state.geo = geo
 
     with col2:
-        st.text_area(
+        segment_desc = st.text_area(
             "Описание сегмента*",
-            key="segment_desc",
+            value=st.session_state.get("segment_desc", ""),
             height=120,
             placeholder="1–3 сегмента: кто эти люди, опыт/профили/уровень.",
+            key="_segment_desc"
         )
-        st.text_area(
+        st.session_state.segment_desc = segment_desc
+        
+        files_links = st.text_area(
             "Файлы/материалы (ссылки)",
-            key="files_links",
+            value=st.session_state.get("files_links", ""),
             height=90,
             placeholder="Лого / брендбук / референсы / исходники (ссылки)",
+            key="_files_links"
         )
-        st.text_input(
+        st.session_state.files_links = files_links
+        
+        contact_name = st.text_input(
             "Контактное лицо (кто заполняет)*",
-            key="contact_name",
+            value=st.session_state.get("contact_name", ""),
             placeholder="Имя",
+            key="_contact_name"
         )
+        st.session_state.contact_name = contact_name
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
     st.subheader("Контекст посадочной (для генерации текстов)")
     st.caption("Если есть — вставьте текст с посадочной. Либо попробуйте подтянуть по ссылке кнопкой ниже.")
 
-    st.text_area(
+    landing_context = st.text_area(
         "Контекст посадочной",
-        key="landing_context",
+        value=st.session_state.get("landing_context", ""),
         height=140,
         placeholder="Вставьте описание/УТП/ключевые блоки с посадочной…",
         label_visibility="collapsed",
+        key="_landing_context"
     )
+    st.session_state.landing_context = landing_context
 
     c1, c2 = st.columns([1, 1])
     with c1:
 
         def pull_context():
-            st.session_state.landing_context = try_fetch_landing_text(st.session_state.landing_url)
+            fetched = try_fetch_landing_text(st.session_state.landing_url)
+            st.session_state.landing_context = fetched
+            st.rerun()
 
         st.button("Подтянуть контекст по ссылке (beta)", on_click=pull_context, use_container_width=True)
 
@@ -637,6 +667,7 @@ def screen_1():
 
         def go_next():
             st.session_state.nav_page = "2. Креативы и площадки"
+            st.rerun()
 
         st.button("Далее →", on_click=go_next, type="primary", use_container_width=True)
 
@@ -650,19 +681,52 @@ def screen_2():
 
     with col1:
         st.subheader("Площадки")
-        st.checkbox("Яндекс", key="pl_yandex")
-        st.checkbox("VK", key="pl_vk")
-        st.checkbox("Telegram Ads", key="pl_tgads")
-        st.checkbox("Telegram посевы", key="pl_tgseeding")
+        
+        pl_yandex = st.checkbox("Яндекс", value=st.session_state.get("pl_yandex", False), key="_pl_yandex")
+        st.session_state.pl_yandex = pl_yandex
+        
+        pl_vk = st.checkbox("VK", value=st.session_state.get("pl_vk", False), key="_pl_vk")
+        st.session_state.pl_vk = pl_vk
+        
+        pl_tgads = st.checkbox("Telegram Ads", value=st.session_state.get("pl_tgads", False), key="_pl_tgads")
+        st.session_state.pl_tgads = pl_tgads
+        
+        pl_tgseeding = st.checkbox("Telegram посевы", value=st.session_state.get("pl_tgseeding", False), key="_pl_tgseeding")
+        st.session_state.pl_tgseeding = pl_tgseeding
 
     with col2:
         st.subheader("Форматы (по площадкам)")
+        
         if st.session_state.pl_yandex:
-            st.multiselect("Яндекс", FORMATS["Яндекс"], key="fmt_yandex", placeholder="Выберите формат(ы)")
+            fmt_yandex = st.multiselect(
+                "Яндекс", 
+                FORMATS["Яндекс"], 
+                default=st.session_state.get("fmt_yandex", []),
+                placeholder="Выберите формат(ы)",
+                key="_fmt_yandex"
+            )
+            st.session_state.fmt_yandex = fmt_yandex
+            
         if st.session_state.pl_vk:
-            st.multiselect("VK", FORMATS["VK"], key="fmt_vk", placeholder="Выберите формат(ы)")
+            fmt_vk = st.multiselect(
+                "VK", 
+                FORMATS["VK"], 
+                default=st.session_state.get("fmt_vk", []),
+                placeholder="Выберите формат(ы)",
+                key="_fmt_vk"
+            )
+            st.session_state.fmt_vk = fmt_vk
+            
         if st.session_state.pl_tgads:
-            st.multiselect("Telegram Ads", FORMATS["Telegram Ads"], key="fmt_tgads", placeholder="Выберите формат(ы)")
+            fmt_tgads = st.multiselect(
+                "Telegram Ads", 
+                FORMATS["Telegram Ads"], 
+                default=st.session_state.get("fmt_tgads", []),
+                placeholder="Выберите формат(ы)",
+                key="_fmt_tgads"
+            )
+            st.session_state.fmt_tgads = fmt_tgads
+            
         if st.session_state.pl_tgseeding:
             st.info("Telegram посевы: формат фиксированный — пост + изображение с текстом")
 
@@ -673,6 +737,7 @@ def screen_2():
 
         def back():
             st.session_state.nav_page = "1. Основная информация"
+            st.rerun()
 
         st.button("← Назад", on_click=back, use_container_width=True)
 
@@ -680,6 +745,7 @@ def screen_2():
 
         def go_next():
             st.session_state.nav_page = "3. Тексты и креативы"
+            st.rerun()
 
         st.button("Далее →", on_click=go_next, type="primary", use_container_width=True)
 
@@ -690,13 +756,21 @@ def screen_3():
     selected = get_selected_platforms()
     if not selected:
         st.markdown('<div class="hint">Сначала выберите площадки на шаге 2.</div>', unsafe_allow_html=True)
+        
+        def back_to_step2():
+            st.session_state.nav_page = "2. Креативы и площадки"
+            st.rerun()
+        
+        st.button("← Вернуться к шагу 2", on_click=back_to_step2, use_container_width=True)
         return
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
     st.markdown("### AI (опционально)")
     st.caption("Сгенерируем по 1 варианту текста для выбранных площадок, используя только данные из шага 1.")
-    st.checkbox("Перезаписать уже заполненные поля", key="ai_overwrite")
+    
+    ai_overwrite = st.checkbox("Перезаписать уже заполненные поля", value=st.session_state.get("ai_overwrite", False), key="_ai_overwrite")
+    st.session_state.ai_overwrite = ai_overwrite
 
     if st.button("⚡ Сгенерировать тексты (1 вариант)", use_container_width=True, type="primary"):
         if not openrouter_api_key():
@@ -754,6 +828,7 @@ def screen_3():
 
             if updated_any:
                 st.markdown('<div class="ok">Готово! Тексты подставлены в поля ниже.</div>', unsafe_allow_html=True)
+                st.rerun()
             else:
                 st.markdown('<div class="hint">Генерация не выполнена — проверьте сообщение ниже.</div>', unsafe_allow_html=True)
 
@@ -766,23 +841,34 @@ def screen_3():
         fmts = get_selected_formats("Яндекс")
         with st.expander("Яндекс", expanded=True):
             st.markdown("### Тексты")
-            st.radio("Кто готовит тексты?", ["Клиент", "Команда hh"], key="yandex_text_owner", horizontal=True)
+            yandex_text_owner = st.radio("Кто готовит тексты?", ["Клиент", "Команда hh"], index=0 if st.session_state.get("yandex_text_owner") == "Клиент" else 1, horizontal=True, key="_yandex_text_owner")
+            st.session_state.yandex_text_owner = yandex_text_owner
+            
             limited_text_input("Заголовок (до 56)", "yandex_title", LIMITS["yandex_title"], placeholder="Коротко и по делу")
             limited_text_area("Текст (до 81)", "yandex_body", LIMITS["yandex_body"], height=90, placeholder="1–2 выгоды + действие")
-            st.text_area(
+            
+            yandex_quicklinks = st.text_area(
                 "Быстрые ссылки (опц.) — по одной на строку: Название | URL",
-                key="yandex_quicklinks",
+                value=st.session_state.get("yandex_quicklinks", ""),
                 height=90,
                 placeholder="Карьерный сайт | https://...\nВакансии | https://...",
+                key="_yandex_quicklinks"
             )
+            st.session_state.yandex_quicklinks = yandex_quicklinks
 
             st.markdown("### Креативы")
-            st.radio("Кто готовит креативы?", ["Клиент", "Команда hh"], key="yandex_creative_owner", horizontal=True)
+            yandex_creative_owner = st.radio("Кто готовит креативы?", ["Клиент", "Команда hh"], index=0 if st.session_state.get("yandex_creative_owner") == "Клиент" else 1, horizontal=True, key="_yandex_creative_owner")
+            st.session_state.yandex_creative_owner = yandex_creative_owner
+            
             if st.session_state.yandex_creative_owner == "Клиент":
-                st.text_area("Ссылки на материалы и исходники", key="yandex_creative_links", height=90)
+                yandex_creative_links = st.text_area("Ссылки на материалы и исходники", value=st.session_state.get("yandex_creative_links", ""), height=90, key="_yandex_creative_links")
+                st.session_state.yandex_creative_links = yandex_creative_links
             else:
-                st.text_area("Что должно быть на креативе (1–2 строки)", key="yandex_creative_brief", height=90)
-                st.text_area("Референсы и исходники (ссылки)", key="yandex_creative_links", height=70)
+                yandex_creative_brief = st.text_area("Что должно быть на креативе (1–2 строки)", value=st.session_state.get("yandex_creative_brief", ""), height=90, key="_yandex_creative_brief")
+                st.session_state.yandex_creative_brief = yandex_creative_brief
+                
+                yandex_creative_links = st.text_area("Референсы и исходники (ссылки)", value=st.session_state.get("yandex_creative_links", ""), height=70, key="_yandex_creative_links2")
+                st.session_state.yandex_creative_links = yandex_creative_links
 
             st.markdown(f"**Выбранные форматы:** {', '.join(fmts) if fmts else 'не выбраны'}")
 
@@ -790,17 +876,27 @@ def screen_3():
         fmts = get_selected_formats("VK")
         with st.expander("VK", expanded=False):
             st.markdown("### Тексты")
-            st.radio("Кто готовит тексты?", ["Клиент", "Команда hh"], key="vk_text_owner", horizontal=True)
+            vk_text_owner = st.radio("Кто готовит тексты?", ["Клиент", "Команда hh"], index=0 if st.session_state.get("vk_text_owner") == "Клиент" else 1, horizontal=True, key="_vk_text_owner")
+            st.session_state.vk_text_owner = vk_text_owner
+            
             limited_text_area("Текст поста (до 700)", "vk_post_text", LIMITS["vk_post"], height=130, placeholder="1–2 выгоды + действие")
-            st.selectbox("CTA (опц.)", ["Перейти", "Подробнее", "Открыть", "Откликнуться"], key="vk_cta")
+            
+            vk_cta = st.selectbox("CTA (опц.)", ["Перейти", "Подробнее", "Открыть", "Откликнуться"], index=["Перейти", "Подробнее", "Открыть", "Откликнуться"].index(st.session_state.get("vk_cta", "Перейти")), key="_vk_cta")
+            st.session_state.vk_cta = vk_cta
 
             st.markdown("### Креативы")
-            st.radio("Кто готовит креативы?", ["Клиент", "Команда hh"], key="vk_creative_owner", horizontal=True)
+            vk_creative_owner = st.radio("Кто готовит креативы?", ["Клиент", "Команда hh"], index=0 if st.session_state.get("vk_creative_owner") == "Клиент" else 1, horizontal=True, key="_vk_creative_owner")
+            st.session_state.vk_creative_owner = vk_creative_owner
+            
             if st.session_state.vk_creative_owner == "Клиент":
-                st.text_area("Ссылки на материалы и исходники", key="vk_creative_links", height=90)
+                vk_creative_links = st.text_area("Ссылки на материалы и исходники", value=st.session_state.get("vk_creative_links", ""), height=90, key="_vk_creative_links")
+                st.session_state.vk_creative_links = vk_creative_links
             else:
-                st.text_area("Что должно быть на креативе (1–2 строки)", key="vk_creative_brief", height=90)
-                st.text_area("Референсы и исходники (ссылки)", key="vk_creative_links", height=70)
+                vk_creative_brief = st.text_area("Что должно быть на креативе (1–2 строки)", value=st.session_state.get("vk_creative_brief", ""), height=90, key="_vk_creative_brief")
+                st.session_state.vk_creative_brief = vk_creative_brief
+                
+                vk_creative_links = st.text_area("Референсы и исходники (ссылки)", value=st.session_state.get("vk_creative_links", ""), height=70, key="_vk_creative_links2")
+                st.session_state.vk_creative_links = vk_creative_links
 
             st.markdown(f"**Выбранные форматы:** {', '.join(fmts) if fmts else 'не выбраны'}")
 
@@ -809,28 +905,42 @@ def screen_3():
         with st.expander("Telegram Ads", expanded=False):
             if "Текст" in fmts:
                 st.markdown("### TG Ads — текст")
-                st.radio("Кто готовит текст?", ["Клиент", "Команда hh"], key="tg_text_owner", horizontal=True)
+                tg_text_owner = st.radio("Кто готовит текст?", ["Клиент", "Команда hh"], index=0 if st.session_state.get("tg_text_owner") == "Клиент" else 1, horizontal=True, key="_tg_text_owner")
+                st.session_state.tg_text_owner = tg_text_owner
+                
                 limited_text_area("Текст сообщения (до 200)", "tg_message", LIMITS["tgads_text"], height=110, placeholder="1–2 предложения + CTA")
-                st.selectbox("CTA (опц.)", ["Подробнее", "Перейти", "Открыть"], key="tg_cta")
+                
+                tg_cta = st.selectbox("CTA (опц.)", ["Подробнее", "Перейти", "Открыть"], index=["Подробнее", "Перейти", "Открыть"].index(st.session_state.get("tg_cta", "Подробнее")), key="_tg_cta")
+                st.session_state.tg_cta = tg_cta
 
             if "Изображение" in fmts or "Видео" in fmts:
                 st.markdown("### TG Ads — медиа")
-                st.radio("Кто готовит медиа?", ["Клиент", "Команда hh"], key="tg_media_owner", horizontal=True)
+                tg_media_owner = st.radio("Кто готовит медиа?", ["Клиент", "Команда hh"], index=0 if st.session_state.get("tg_media_owner") == "Клиент" else 1, horizontal=True, key="_tg_media_owner")
+                st.session_state.tg_media_owner = tg_media_owner
+                
                 if st.session_state.tg_media_owner == "Клиент":
-                    st.text_area("Ссылки на материалы и исходники", key="tg_media_links", height=90)
+                    tg_media_links = st.text_area("Ссылки на материалы и исходники", value=st.session_state.get("tg_media_links", ""), height=90, key="_tg_media_links")
+                    st.session_state.tg_media_links = tg_media_links
                 else:
-                    st.text_area("Что должно быть на креативе (1–2 строки)", key="tg_media_brief", height=90)
-                    st.text_area("Референсы и исходники (ссылки)", key="tg_media_links", height=70)
+                    tg_media_brief = st.text_area("Что должно быть на креативе (1–2 строки)", value=st.session_state.get("tg_media_brief", ""), height=90, key="_tg_media_brief")
+                    st.session_state.tg_media_brief = tg_media_brief
+                    
+                    tg_media_links = st.text_area("Референсы и исходники (ссылки)", value=st.session_state.get("tg_media_links", ""), height=70, key="_tg_media_links2")
+                    st.session_state.tg_media_links = tg_media_links
 
             st.markdown(f"**Выбранные форматы:** {', '.join(fmts) if fmts else 'не выбраны'}")
 
     if "Telegram посевы" in selected:
         with st.expander("Telegram посевы", expanded=False):
             st.markdown("Важно: в посевах картинка обычно с текстом на ней — укажите ключевое сообщение.")
-            st.radio("Кто готовит материалы?", ["Клиент", "Команда hh"], key="seed_owner", horizontal=True)
+            seed_owner = st.radio("Кто готовит материалы?", ["Клиент", "Команда hh"], index=0 if st.session_state.get("seed_owner") == "Клиент" else 1, horizontal=True, key="_seed_owner")
+            st.session_state.seed_owner = seed_owner
+            
             limited_text_input("Текст на изображении (1 строка, до 40)", "seed_image_text", LIMITS["seed_img_text"], placeholder="Короткое УТП")
             limited_text_area("Текст поста (до 500)", "seed_post_text", LIMITS["seed_post"], height=150, placeholder="УТП → пояснение → ссылка")
-            st.text_area("Ссылки на материалы и исходники (опц.)", key="seed_links", height=80)
+            
+            seed_links = st.text_area("Ссылки на материалы и исходники (опц.)", value=st.session_state.get("seed_links", ""), height=80, key="_seed_links")
+            st.session_state.seed_links = seed_links
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1])
@@ -838,6 +948,7 @@ def screen_3():
 
         def back():
             st.session_state.nav_page = "2. Креативы и площадки"
+            st.rerun()
 
         st.button("← Назад", on_click=back, use_container_width=True)
 
@@ -845,6 +956,7 @@ def screen_3():
 
         def go_next():
             st.session_state.nav_page = "4. Примерный вид объявлений"
+            st.rerun()
 
         st.button("Далее →", on_click=go_next, type="primary", use_container_width=True)
 
@@ -853,38 +965,38 @@ def screen_3():
 # =========================
 
 def demo_card_yandex(fmt: str):
-    title = (st.session_state.yandex_title or "").strip() or "Заголовок"
-    body = (st.session_state.yandex_body or "").strip() or "Текст объявления"
+    title = (st.session_state.get("yandex_title", "") or "").strip() or "Заголовок"
+    body = (st.session_state.get("yandex_body", "") or "").strip() or "Текст объявления"
     st.markdown(f"<div class='badge'>Яндекс · {fmt}</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
 <div class="ad">
   <div class="ad-head">{title}</div>
   <div class="ad-text">{body}</div>
-  <div class="ad-meta">Ссылка: {st.session_state.landing_url or "https://..."}</div>
+  <div class="ad-meta">Ссылка: {st.session_state.get('landing_url', '') or "https://..."}</div>
 </div>
 """,
         unsafe_allow_html=True,
     )
 
 def demo_card_vk(fmt: str):
-    post = (st.session_state.vk_post_text or "").strip() or "Текст поста"
-    cta = st.session_state.vk_cta
+    post = (st.session_state.get("vk_post_text", "") or "").strip() or "Текст поста"
+    cta = st.session_state.get("vk_cta", "Перейти")
     st.markdown(f"<div class='badge'>VK · {fmt}</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
 <div class="ad">
   <div class="ad-text">{post}</div>
   <a class="ad-btn" href="#" onclick="return false;">{cta}</a>
-  <div class="ad-meta" style="margin-top:10px;">Ссылка: {st.session_state.landing_url or "https://..."}</div>
+  <div class="ad-meta" style="margin-top:10px;">Ссылка: {st.session_state.get('landing_url', '') or "https://..."}</div>
 </div>
 """,
         unsafe_allow_html=True,
     )
 
 def demo_card_tg_text():
-    msg = (st.session_state.tg_message or "").strip() or "Текст сообщения"
-    cta = st.session_state.tg_cta
+    msg = (st.session_state.get("tg_message", "") or "").strip() or "Текст сообщения"
+    cta = st.session_state.get("tg_cta", "Подробнее")
     st.markdown("<div class='badge'>Telegram Ads · Текст</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
@@ -897,28 +1009,28 @@ def demo_card_tg_text():
     )
 
 def demo_card_tg_media(fmt: str):
-    caption = (st.session_state.tg_message or "").strip() or "Подпись / сопроводительный текст"
+    caption = (st.session_state.get("tg_message", "") or "").strip() or "Подпись / сопроводительный текст"
     st.markdown(f"<div class='badge'>Telegram Ads · {fmt}</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
 <div class="ad">
   <div class="ad-text">{caption}</div>
-  <div class="ad-meta">Ссылка: {st.session_state.landing_url or "https://..."}</div>
+  <div class="ad-meta">Ссылка: {st.session_state.get('landing_url', '') or "https://..."}</div>
 </div>
 """,
         unsafe_allow_html=True,
     )
 
 def demo_card_seeding():
-    img_text = (st.session_state.seed_image_text or "").strip() or "Текст на изображении"
-    post = (st.session_state.seed_post_text or "").strip() or "Текст поста"
+    img_text = (st.session_state.get("seed_image_text", "") or "").strip() or "Текст на изображении"
+    post = (st.session_state.get("seed_post_text", "") or "").strip() or "Текст поста"
     st.markdown("<div class='badge'>Telegram посевы · Пост + изображение</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
 <div class="ad">
   <div class="ad-head">{img_text}</div>
   <div class="ad-text">{post}</div>
-  <div class="ad-meta">Ссылка: {st.session_state.landing_url or "https://..."}</div>
+  <div class="ad-meta">Ссылка: {st.session_state.get('landing_url', '') or "https://..."}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -926,7 +1038,9 @@ def demo_card_seeding():
 
 def render_demo_image(platform: str, fmt: str):
     key = f"{platform}|{fmt}"
-    images = st.session_state.demo_images if isinstance(st.session_state.demo_images, dict) else {}
+    images = st.session_state.get("demo_images", {})
+    if not isinstance(images, dict):
+        images = {}
     url = images.get(key)
     if url:
         st.image(url, use_container_width=True)
@@ -983,21 +1097,22 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux-schnell, black-forest
                             if not need_visual:
                                 continue
 
-                            core = st.session_state.what_advertise or "HR-кампания"
-                            seg = st.session_state.segment_desc or "соискатели"
-                            geo = st.session_state.geo or "Россия"
+                            core = st.session_state.get("what_advertise", "") or "HR-кампания"
+                            seg = st.session_state.get("segment_desc", "") or "соискатели"
+                            geo = st.session_state.get("geo", "") or "Россия"
 
                             if p == "Telegram посевы":
-                                utp = st.session_state.seed_image_text or "Ключевое сообщение"
+                                utp = st.session_state.get("seed_image_text", "") or "Ключевое сообщение"
                                 aspect = "4:5"
                             elif p == "Яндекс":
-                                utp = st.session_state.yandex_title or "Ключевое сообщение"
+                                utp = st.session_state.get("yandex_title", "") or "Ключевое сообщение"
                                 aspect = "16:9"
                             elif p == "VK":
-                                utp = (st.session_state.vk_post_text[:60] if st.session_state.vk_post_text else "Ключевое сообщение")
+                                vk_post = st.session_state.get("vk_post_text", "")
+                                utp = (vk_post[:60] if vk_post else "Ключевое сообщение")
                                 aspect = "16:9"
                             else:
-                                utp = st.session_state.tg_media_brief or st.session_state.tg_message or "Ключевое сообщение"
+                                utp = st.session_state.get("tg_media_brief", "") or st.session_state.get("tg_message", "") or "Ключевое сообщение"
                                 aspect = "16:9"
 
                             prompt = (
@@ -1022,6 +1137,7 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux-schnell, black-forest
                     st.code("\n".join(errors))
                 else:
                     st.success("Готово! Пролистайте ниже — демо-визуалы появятся в карточках.")
+                    st.rerun()
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
@@ -1069,6 +1185,7 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux-schnell, black-forest
 
         def back():
             st.session_state.nav_page = "3. Тексты и креативы"
+            st.rerun()
 
         st.button("← Назад", on_click=back, use_container_width=True)
 
