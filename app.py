@@ -136,21 +136,18 @@ DEFAULT_FORM = {
     "nav_page": PAGES[0],
 }
 
-
 def _deepcopy_if_needed(v: Any) -> Any:
     return deepcopy(v) if isinstance(v, (dict, list)) else v
 
-
 def init_state():
     """Initialize missing keys only.
-
+    
     ВАЖНО: не перезаписываем существующие ключи на каждом rerun,
     иначе при переходах/любом клике будет происходить "сброс".
     """
     for k, v in DEFAULT_FORM.items():
         if k not in st.session_state:
             st.session_state[k] = _deepcopy_if_needed(v)
-
 
 init_state()
 
@@ -162,18 +159,15 @@ def remaining(max_len: int, value: str) -> int:
     value = value or ""
     return max(max_len - len(value), 0)
 
-
 def limited_text_input(label: str, key: str, max_chars: int, placeholder: str = ""):
     val = st.text_input(label, key=key, max_chars=max_chars, placeholder=placeholder)
     st.caption(f"Осталось {remaining(max_chars, val)} символов из {max_chars}")
     return val
 
-
 def limited_text_area(label: str, key: str, max_chars: int, height: int = 110, placeholder: str = ""):
     val = st.text_area(label, key=key, max_chars=max_chars, height=height, placeholder=placeholder)
     st.caption(f"Осталось {remaining(max_chars, val)} символов из {max_chars}")
     return val
-
 
 def normalize_url(u: str) -> str:
     u = (u or "").strip()
@@ -182,7 +176,6 @@ def normalize_url(u: str) -> str:
     if not re.match(r"^https?://", u, flags=re.I):
         u = "https://" + u
     return u
-
 
 def try_fetch_landing_text(url: str) -> str:
     url = normalize_url(url)
@@ -201,9 +194,8 @@ def try_fetch_landing_text(url: str) -> str:
     except Exception as e:
         return f"(Не удалось загрузить страницу: {e})"
 
-
-def get_selected_platforms() -> list[str]:
-    res: list[str] = []
+def get_selected_platforms() -> list:
+    res = []
     if st.session_state.pl_yandex:
         res.append("Яндекс")
     if st.session_state.pl_vk:
@@ -214,8 +206,7 @@ def get_selected_platforms() -> list[str]:
         res.append("Telegram посевы")
     return res
 
-
-def get_selected_formats(platform: str) -> list[str]:
+def get_selected_formats(platform: str) -> list:
     if platform == "Яндекс":
         return st.session_state.fmt_yandex or []
     if platform == "VK":
@@ -225,7 +216,6 @@ def get_selected_formats(platform: str) -> list[str]:
     if platform == "Telegram посевы":
         return ["Пост + изображение с текстом"]
     return []
-
 
 # =========================
 # OpenRouter helpers
@@ -237,18 +227,13 @@ def _secret(name: str, default: str = "") -> str:
     except Exception:
         return default
 
-
 def openrouter_api_key() -> str:
     return _secret("OPENROUTER_API_KEY", "")
 
-
 def openrouter_text_model() -> str:
-    # Рекомендуемый безопасный дефолт: openrouter/auto
-    # (если вы хотите фиксировать — задайте OPENROUTER_TEXT_MODEL в Secrets)
     return _secret("OPENROUTER_TEXT_MODEL", "openrouter/auto")
 
-
-def openrouter_text_fallbacks() -> list[str]:
+def openrouter_text_fallbacks() -> list:
     raw = _secret("OPENROUTER_TEXT_MODEL_FALLBACKS", "")
     models = [m.strip() for m in raw.split(",") if m.strip()]
     if not models:
@@ -259,30 +244,26 @@ def openrouter_text_fallbacks() -> list[str]:
         ]
     return models
 
-
 def openrouter_image_model() -> str:
-    return _secret("OPENROUTER_IMAGE_MODEL", "black-forest-labs/flux.2-flex")
+    return _secret("OPENROUTER_IMAGE_MODEL", "black-forest-labs/flux-schnell")
 
-
-def openrouter_image_fallbacks() -> list[str]:
+def openrouter_image_fallbacks() -> list:
     raw = _secret("OPENROUTER_IMAGE_MODEL_FALLBACKS", "")
     models = [m.strip() for m in raw.split(",") if m.strip()]
     if not models:
         models = [
-            "black-forest-labs/flux.1-schnell",
-            "black-forest-labs/flux.1-dev",
+            "black-forest-labs/flux-schnell",
+            "black-forest-labs/flux-dev",
         ]
     return models
-
 
 def openrouter_provider_prefs() -> dict:
     ignore_raw = _secret("OPENROUTER_PROVIDER_IGNORE", "")
     ignore = [x.strip() for x in ignore_raw.split(",") if x.strip()]
-    prefs: dict[str, Any] = {"allow_fallbacks": True, "sort": "price"}
+    prefs = {"allow_fallbacks": True, "sort": "price"}
     if ignore:
         prefs["ignore"] = ignore
     return prefs
-
 
 def openrouter_chat(
     *,
@@ -290,8 +271,8 @@ def openrouter_chat(
     messages: list,
     temperature: float = 0.6,
     max_tokens: int = 900,
-    modalities: list[str] | None = None,
-    image_config: dict | None = None,
+    modalities: list = None,
+    image_config: dict = None,
 ):
     api_key = openrouter_api_key()
     if not api_key:
@@ -304,7 +285,7 @@ def openrouter_chat(
         "X-Title": _secret("OPENROUTER_APP_TITLE", "hh-segments-brief"),
     }
 
-    payload: dict[str, Any] = {
+    payload = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
@@ -332,16 +313,14 @@ def openrouter_chat(
 
     return r.json()
 
-
-def openrouter_chat_with_fallback(models: list[str], **kwargs):
-    errors: list[str] = []
+def openrouter_chat_with_fallback(models: list, **kwargs):
+    errors = []
     for m in models:
         try:
             return m, openrouter_chat(model=m, **kwargs)
         except Exception as e:
             errors.append(f"{m}: {e}")
     raise RuntimeError(" ; ".join(errors[-3:]) if errors else "OpenRouter: неизвестная ошибка")
-
 
 def extract_json_obj(text: str) -> dict:
     if not text:
@@ -368,13 +347,11 @@ def extract_json_obj(text: str) -> dict:
 
     return {}
 
-
 def clamp(s: str, limit: int) -> str:
     s = (s or "").strip()
     if limit and len(s) > limit:
         s = s[:limit].rstrip()
     return s
-
 
 def ai_generate_one_text(platform: str) -> dict:
     """Generate ONE text variant using only Step 1 fields."""
@@ -479,7 +456,6 @@ def ai_generate_one_text(platform: str) -> dict:
         "post": clamp(obj.get("post", ""), LIMITS["seed_post"]),
     }
 
-
 def extract_image_url(data: dict) -> str:
     if not data or not data.get("choices"):
         return ""
@@ -512,16 +488,11 @@ def extract_image_url(data: dict) -> str:
 
     return ""
 
-
 def generate_demo_image(prompt: str, aspect_ratio: str = "16:9") -> str:
-    """Generate image via OpenRouter.
-
-    Важно: image-модели часто НЕ поддерживают одновременно output modalities ['image','text'].
-    Поэтому запрашиваем только ['image'].
-    """
+    """Generate image via OpenRouter."""
     models = [openrouter_image_model()] + openrouter_image_fallbacks()
 
-    last_err: Exception | None = None
+    last_err = None
     for model in models:
         try:
             user_prompt = f"{prompt}\n\nAspect ratio: {aspect_ratio}."
@@ -542,7 +513,6 @@ def generate_demo_image(prompt: str, aspect_ratio: str = "16:9") -> str:
 
     raise RuntimeError(last_err or "Не удалось сгенерировать изображение")
 
-
 # =========================
 # Sidebar (navigation + reset)
 # =========================
@@ -552,20 +522,17 @@ st.sidebar.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
 st.sidebar.radio("Навигация", PAGES, key="nav_page")
 
-
 def reset_form():
     nav = st.session_state.get("nav_page", PAGES[0])
     for k, v in DEFAULT_FORM.items():
         st.session_state[k] = _deepcopy_if_needed(v)
     st.session_state["nav_page"] = nav
 
-
 st.sidebar.button("↩️ Сбросить форму", on_click=reset_form, use_container_width=True)
 
 # Header (main)
 st.markdown('<div class="app-title">hh Сегменты — заявка</div>', unsafe_allow_html=True)
 st.markdown('<div class="app-sub">Заполнение брифа займёт до 5 минут.</div>', unsafe_allow_html=True)
-
 
 # =========================
 # Screens
@@ -589,7 +556,6 @@ def screen_0():
         st.session_state.nav_page = "1. Основная информация"
 
     st.button("Начать →", on_click=go_next, type="primary", use_container_width=True)
-
 
 def screen_1():
     st.title("Основная информация")
@@ -674,7 +640,6 @@ def screen_1():
 
         st.button("Далее →", on_click=go_next, type="primary", use_container_width=True)
 
-
 def screen_2():
     st.title("Креативы и площадки")
     st.caption("Выберите рекламные площадки и форматы креативов.")
@@ -718,7 +683,6 @@ def screen_2():
 
         st.button("Далее →", on_click=go_next, type="primary", use_container_width=True)
 
-
 def screen_3():
     st.title("Тексты и креативы")
     st.caption("Заполните тексты и креативы по выбранным площадкам и форматам. Данные сохраняются автоматически.")
@@ -744,7 +708,7 @@ def screen_3():
         ):
             st.error("Заполните на шаге 1 минимум: «Что рекламируем», «Описание сегмента», «Посадочная ссылка». ")
         else:
-            logs: list[str] = []
+            logs = []
             updated_any = False
             overwrite = bool(st.session_state.ai_overwrite)
 
@@ -884,7 +848,6 @@ def screen_3():
 
         st.button("Далее →", on_click=go_next, type="primary", use_container_width=True)
 
-
 # =========================
 # Demo cards
 # =========================
@@ -904,7 +867,6 @@ def demo_card_yandex(fmt: str):
         unsafe_allow_html=True,
     )
 
-
 def demo_card_vk(fmt: str):
     post = (st.session_state.vk_post_text or "").strip() or "Текст поста"
     cta = st.session_state.vk_cta
@@ -920,7 +882,6 @@ def demo_card_vk(fmt: str):
         unsafe_allow_html=True,
     )
 
-
 def demo_card_tg_text():
     msg = (st.session_state.tg_message or "").strip() or "Текст сообщения"
     cta = st.session_state.tg_cta
@@ -935,7 +896,6 @@ def demo_card_tg_text():
         unsafe_allow_html=True,
     )
 
-
 def demo_card_tg_media(fmt: str):
     caption = (st.session_state.tg_message or "").strip() or "Подпись / сопроводительный текст"
     st.markdown(f"<div class='badge'>Telegram Ads · {fmt}</div>", unsafe_allow_html=True)
@@ -948,7 +908,6 @@ def demo_card_tg_media(fmt: str):
 """,
         unsafe_allow_html=True,
     )
-
 
 def demo_card_seeding():
     img_text = (st.session_state.seed_image_text or "").strip() or "Текст на изображении"
@@ -965,7 +924,6 @@ def demo_card_seeding():
         unsafe_allow_html=True,
     )
 
-
 def render_demo_image(platform: str, fmt: str):
     key = f"{platform}|{fmt}"
     images = st.session_state.demo_images if isinstance(st.session_state.demo_images, dict) else {}
@@ -974,7 +932,6 @@ def render_demo_image(platform: str, fmt: str):
         st.image(url, use_container_width=True)
     else:
         st.info("Демо-визуал пока не сгенерирован. Нажмите «🎨 Сгенерировать демо-визуалы» выше.")
-
 
 def screen_4():
     st.title("Примерный вид рекламных объявлений")
@@ -1006,14 +963,14 @@ def screen_4():
                 "Основная модель — OPENROUTER_IMAGE_MODEL, фоллбеки — OPENROUTER_IMAGE_MODEL_FALLBACKS."
             )
             st.code(
-                """OPENROUTER_IMAGE_MODEL = "black-forest-labs/flux.2-flex"
-OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, black-forest-labs/flux.1-dev"
+                """OPENROUTER_IMAGE_MODEL = "black-forest-labs/flux-schnell"
+OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux-schnell, black-forest-labs/flux-dev"
 """,
                 language="toml",
             )
 
             if st.button("🎨 Сгенерировать демо-визуалы", type="primary", use_container_width=True):
-                errors: list[str] = []
+                errors = []
                 with st.spinner("Генерируем демо-визуалы..."):
                     for p in selected:
                         fmts = get_selected_formats(p)
@@ -1117,7 +1074,6 @@ OPENROUTER_IMAGE_MODEL_FALLBACKS = "black-forest-labs/flux.1-schnell, black-fore
 
     with c2:
         st.button("Готово ✅", use_container_width=True)
-
 
 # =========================
 # Router
