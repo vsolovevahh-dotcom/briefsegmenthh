@@ -697,7 +697,7 @@ def demo_card_seeding():
     st.markdown(f'<div class="ad"><div class="ad-head">{img_text}</div><div class="ad-text">{post}</div><div class="ad-meta">Ссылка: {st.session_state.get("landing_url", "") or "https://..."}</div></div>', unsafe_allow_html=True)
 
 def render_demo_image(platform: str, fmt: str):
-    """Отображает сгенерированное изображение с поддержкой base64."""
+    """Отображает сгенерированное изображение с поддержкой base64 и старых версий Streamlit."""
     key = f"{platform}|{fmt}"
     images = st.session_state.get("demo_images", {})
     if not isinstance(images, dict):
@@ -712,20 +712,29 @@ def render_demo_image(platform: str, fmt: str):
     try:
         # Если это base64 data URL
         if url.startswith("data:image"):
-            # Формат: data:image/png;base64,iVBORw0KGgoAAAANS...
             header, encoded = url.split(",", 1)
             image_bytes = base64.b64decode(encoded)
-            # Оборачиваем в BytesIO для st.image
             image_io = BytesIO(image_bytes)
-            st.image(image_io, use_container_width=True)
+            
+            # Обратная совместимость с разными версиями Streamlit
+            try:
+                st.image(image_io, use_container_width=True)
+            except TypeError:
+                st.image(image_io, use_column_width=True)
+                
         # Если это обычный URL
         elif url.startswith("http"):
-            st.image(url, use_container_width=True)
+            try:
+                st.image(url, use_container_width=True)
+            except TypeError:
+                st.image(url, use_column_width=True)
         else:
-            st.warning(f"Неподдерживаемый формат изображения: {url[:50]}...")
+            st.warning(f"Неподдерживаемый формат изображения")
+            
     except Exception as e:
         st.error(f"Ошибка отображения изображения: {str(e)}")
-        st.code(f"URL: {url[:100]}...")
+        with st.expander("Детали ошибки"):
+            st.code(f"URL: {url[:200]}...")
 
 def screen_4():
     st.title("Примерный вид рекламных объявлений")
